@@ -161,7 +161,7 @@ namespace {
             auto it = g_freshEticket.find(appId);
             if (it != g_freshEticket.end()) ticket = it->second;
         }
-        const bool fromFresh = !ticket.empty();
+        [[maybe_unused]] const bool fromFresh = !ticket.empty();
         if (ticket.empty()) {
             ticket = AppTicket::GetEncryptedTicketFromCredentialStore(appId);
         }

@@ -160,7 +160,7 @@ namespace Hooks_Package {
         LOG_PACKAGE_DEBUG("NotifyLicenseChanged: processing {} additions", additions.size());
         if (!additions.empty()) {
             uint32_t oldSize = pPkg->AppIdVec.m_Size;
-            if (CUtlMemoryGrowWrap(&pPkg->AppIdVec, additions.size())) {
+            if (CUtlMemoryGrowWrap(&pPkg->AppIdVec, static_cast<int>(additions.size()))) {
                 // An applied addition invalidates any UI removal that has not
                 // reached the UI thread yet.
                 for (AppId_t id : additions)

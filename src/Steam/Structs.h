@@ -159,6 +159,13 @@ struct KeyValues
 	//   bit[29]    m_bHasEscapeSequences              escape sequences enabled during parse
 	//   bit[30]    m_bEvaluateConditionals            conditional blocks evaluated during parse
 	//   bit[31]    m_bAllocatedValue                  value allocated on heap (must deref offset 0)
+	// The nameless struct/union mirrors Steam's KeyValues packed DWORD exactly;
+	// the anonymous members are the layout contract, so C4201 (nonstandard
+	// nameless struct/union, surfaced by /permissive-) is suppressed locally
+	// rather than by renaming — a name here would change the access syntax the
+	// hooks rely on, not the layout.
+#pragma warning(push)
+#pragma warning(disable: 4201)
 	union
 	{
 		struct
@@ -171,6 +178,7 @@ struct KeyValues
 		};
 		unsigned int m_iPackedKeyAndType;    // raw DWORD access
 	};
+#pragma warning(pop)
 
 	unsigned int        m_unFlags;          // +0x14 (4B) — additional flags
 

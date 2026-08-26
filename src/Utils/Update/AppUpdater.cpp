@@ -63,7 +63,7 @@ CheckResult Check()
     toml::table tbl;
     try {
         tbl = toml::parse(*body);
-    } catch (const toml::parse_error& e) {
+    } catch ([[maybe_unused]] const toml::parse_error& e) {
         LOG_WARN("AppUpdater: latest.toml parse error: {}", e.description());
         return r;
     }

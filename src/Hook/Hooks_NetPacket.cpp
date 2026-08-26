@@ -490,7 +490,7 @@ namespace Hooks_NetPacket_OwnershipTicket {
         if (resp.eresult() == k_EResultOK) return;
         if (!LuaConfig::HasDepot(resp.app_id())) return;
 
-        const int32 origEresult = resp.eresult();
+        [[maybe_unused]] const int32 origEresult = resp.eresult();
 
         // Prefer the credential-store ticket when it is already valid: that
         // ensures GetAppOwnershipTicketExtendedData and the 858 response hand

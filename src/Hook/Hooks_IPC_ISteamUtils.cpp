@@ -83,7 +83,7 @@ namespace {
         GetAPICallResultReq req{pRead};
         if (!req.ok()) return;
 
-        AppId_t appId = Hooks_Misc::ResolveAppId();
+        [[maybe_unused]] AppId_t appId = Hooks_Misc::ResolveAppId();
         LOG_IPC_DEBUG("{}, AppId={}", req.DebugString(),appId);
         for (const auto& entry : kAPICallResultHandlers) {
             if (entry.callbackId == req.iCallbackExpected()) {

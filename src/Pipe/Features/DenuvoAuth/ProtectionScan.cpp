@@ -237,7 +237,7 @@ namespace {
             section->rawSize,
             kDenuvoOepPattern,
             kOepScanChunkBytes);
-        const double scanMs = scanTimer.ElapsedMs();
+        [[maybe_unused]] const double scanMs = scanTimer.ElapsedMs();
         LOG_PIPE_DEBUG("DenuvoAuth: OEP section timing path={} section={} raw_start=0x{:X} scan_size={} ({:.2f} MB) scan_ms={:.3f} matched={}",
                        module.path,
                        section->name,
@@ -296,7 +296,7 @@ namespace {
             match.entryPointRva = image.EntryPointRva();
             match.matchRawOffset = section.rawOffset;
             match.matchRva = section.virtualAddress;
-            const char* confidence =
+            [[maybe_unused]] const char* confidence =
                 entropy >= kProtectorBlobHighConfidenceEntropy ? "high(encrypted)" : "elevated";
             LOG_PIPE_INFO("DenuvoAuth: protector blob section path={} section={} raw_size={} ({:.2f} MB) entropy={:.3f} flags=RWX confidence={}",
                           module.path, section.name, section.rawSize,
@@ -377,7 +377,7 @@ namespace {
                 PathStartsWithInsensitive(module.path, gameDirectory);
         }
 
-        const size_t unsortedCount = modules.size();
+        [[maybe_unused]] const size_t unsortedCount = modules.size();
         std::stable_sort(modules.begin(), modules.end(),
             [](const ModuleCandidate& lhs, const ModuleCandidate& rhs) {
                 if (lhs.executable != rhs.executable) return lhs.executable;

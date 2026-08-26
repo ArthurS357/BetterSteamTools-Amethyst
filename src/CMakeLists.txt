@@ -175,6 +175,49 @@ target_compile_definitions(AmethystTool PRIVATE
     $<$<CONFIG:Debug>:OPENSTEAMTOOL_LOGGING_ENABLED>
 )
 
+# ---------------------------------------------------------------------------
+# Warning hardening (M-2). Strong warnings are scoped to AmethystTool only —
+# the loader-hijack proxies (dwmapi, xinput1_4) and third-party FetchContent
+# deps (Lua, protobuf, spdlog, toml++) keep their default level so this change
+# stays a diff on our own code. /WX is intentionally NOT enabled here: the goal
+# of this pass is to surface warnings, not to block the build. Turning them into
+# errors is gated behind OST_WARNINGS_AS_ERRORS for a future CI opt-in.
+#   /W4               high signal without /Wall's informational noise
+#   /permissive-      reject MSVC-only non-conforming constructs
+#   /w14062           unhandled enumerator in switch (off by default even at /W4)
+#   /utf-8            source + execution charset UTF-8 (accented pt-BR strings)
+#   /Zc:preprocessor  conforming preprocessor (variadic macro parity)
+option(OST_WARNINGS_AS_ERRORS "Treat AmethystTool warnings as errors (/WX)" OFF)
+if(MSVC)
+    target_compile_options(AmethystTool PRIVATE
+        /W4 /permissive- /w14062 /utf-8 /Zc:preprocessor
+        # Keep /W4 pointed at OUR code: angle-bracket includes (Windows SDK,
+        # toml++, spdlog, Lua, the protobuf runtime headers) are external and
+        # compiled at W0. Our own headers use quoted includes and stay at W4.
+        /external:anglebrackets /external:W0)
+    if(OST_WARNINGS_AS_ERRORS)
+        target_compile_options(AmethystTool PRIVATE /WX)
+    endif()
+
+    # The protobuf-generated translation unit is machine-emitted third-party
+    # code (C4125/C4244 from protoc's output); it isn't ours to hand-edit, so it
+    # compiles at W0 while the rest of the DLL stays at W4 (source COMPILE_OPTIONS
+    # land after the target's /W4, so /W0 wins).
+    #
+    # Source-file properties are matched by path string and do NOT evaluate
+    # generator expressions, so the genex $<CONFIG> path that PROTO_GEN_DIR adds
+    # to the target won't match on its own. Under Ninja Multi-Config CMake keys
+    # the compile off the concrete per-config paths, so those are listed too — the
+    # combination is what makes it robust. Verified: the .pb.cc compile line
+    # carries /W0 (not /W4) and third-party warnings drop to zero in both configs.
+    set_source_files_properties(
+        "${PROTO_GEN_DIR}/steam_messages.pb.cc"
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/Debug/steam_messages.pb.cc"
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/Release/steam_messages.pb.cc"
+        TARGET_DIRECTORY AmethystTool
+        PROPERTIES COMPILE_OPTIONS "/W0")
+endif()
+
 # Backend endpoint for on-demand eticket minting (strict Denuvo titles that bind
 # their encrypted app ticket to a launch nonce). Empty by default: the feature is
 # off and the DLL never makes a network request. Point your own build at your own
@@ -216,3 +259,16 @@ add_library(xinput1_4 SHARED
     xinput1_4/xinput1_4.cpp
     xinput1_4/xinput1_4.def
 )
+
+# ---------------------------------------------------------------------------
+# Unit tests (A-3). GoogleTest-based; fetched via FetchContent (cached at
+# <repo>/.deps like the other deps). ON by default; disable with
+#   cmake --preset ninja-multi -DOST_BUILD_TESTS=OFF
+# to skip the fetch (e.g. a fully offline first configure). Tests link the
+# OSTPlatform static lib and never touch the injected/hooking code paths.
+# ---------------------------------------------------------------------------
+option(OST_BUILD_TESTS "Build the AmethystTool unit test suite" ON)
+if(OST_BUILD_TESTS)
+    enable_testing()
+    add_subdirectory(tests)
+endif()

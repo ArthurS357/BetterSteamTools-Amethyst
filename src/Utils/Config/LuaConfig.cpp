@@ -837,7 +837,7 @@ namespace LuaConfig{
             int rc = luaL_loadstring(g_lua_state, chunk.c_str());
             if (rc == LUA_OK) {
                 if (lua_pcall(g_lua_state, 0, 0, 0) != LUA_OK) {
-                    const char* err = lua_tostring(g_lua_state, -1);
+                    [[maybe_unused]] const char* err = lua_tostring(g_lua_state, -1);
                     LOG_WARN("{}:{}: {}", path.filename().string(), lineNo,
                              err ? err : "unknown");
                 }
@@ -845,7 +845,7 @@ namespace LuaConfig{
             } else if (rc == LUA_ERRSYNTAX) {
                 lua_pop(g_lua_state, 1);
             } else {
-                const char* err = lua_tostring(g_lua_state, -1);
+                [[maybe_unused]] const char* err = lua_tostring(g_lua_state, -1);
                 LOG_WARN("{}:{}: {}", path.filename().string(), lineNo, err ? err : "unknown");
                 lua_pop(g_lua_state, 1);
                 chunk.clear();

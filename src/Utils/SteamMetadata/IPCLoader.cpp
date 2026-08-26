@@ -173,7 +173,7 @@ bool Load(const std::string& steamclientPath)
     toml::table root;
     try {
         root = toml::parse(r.body);
-    } catch (const toml::parse_error& e) {
+    } catch ([[maybe_unused]] const toml::parse_error& e) {
         LOG_WARN("IPCLoader: TOML parse error: {}", e.description());
         ShowMissingPopup(r.sha256);
         return false;

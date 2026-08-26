@@ -1,0 +1,27 @@
+# clang-format configuration for AmethystTool (M-2 hardening).
+#
+# Authored in this pass but intentionally NOT applied across the tree — running
+# it now would produce a massive, review-hostile diff and bury the actual
+# hardening changes. It exists so new/edited code can be formatted consistently
+# (clang-format on save, or a pre-commit hook on staged files only) and so the
+# style is documented. Base is LLVM with the project's observed conventions:
+# 4-space indent, 120-column limit, attach braces.
+---
+Language: Cpp
+BasedOnStyle: LLVM
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+ColumnLimit: 120
+NamespaceIndentation: All
+AccessModifierOffset: -4
+PointerAlignment: Left
+BreakBeforeBraces: Attach
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+SortIncludes: false
+FixNamespaceComments: true
+IndentCaseLabels: true
+SpaceAfterCStyleCast: true
+AlwaysBreakTemplateDeclarations: Yes

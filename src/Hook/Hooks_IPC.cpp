@@ -175,7 +175,7 @@ namespace Hooks_IPC {
                 LOG_IPC_WARN("[Handler Disabled] no IPC spec for {}",e.DebugString());
                 continue;
             }
-            auto& handler = g_Handlers.emplace_back(e,*m);
+            [[maybe_unused]] auto& handler = g_Handlers.emplace_back(e,*m);
             LOG_IPC_DEBUG("Hooks_IPC: resolved {}", handler.DebugString());
         }
     }

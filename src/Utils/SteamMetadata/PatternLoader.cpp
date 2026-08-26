@@ -247,7 +247,7 @@ void* FindPattern(OSTPlatform::DynamicLibrary::ModuleHandle module, const char* 
         if (ParseSig(entry.sig, bytes, mask)) {
             void* addr = ScanModule(module, bytes, mask);
             if (addr) {
-                uintptr_t rva = reinterpret_cast<uintptr_t>(addr) -
+                [[maybe_unused]] uintptr_t rva = reinterpret_cast<uintptr_t>(addr) -
                                 reinterpret_cast<uintptr_t>(module);
                 LOG_DEBUG("PatternLoader: {} resolved via sig @ RVA 0x{:X}",
                           funcName, rva);

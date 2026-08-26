@@ -86,7 +86,7 @@ Result Fetch(const Request& request)
     // 1. SHA-256 of the DLL.
     const auto hashStart = std::chrono::steady_clock::now();
     out.sha256 = SteamDiagnostics::Sha256Of(request.dllPath);
-    const auto hashMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+    [[maybe_unused]] const auto hashMs = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now() - hashStart).count();
 
     if (out.sha256.empty()) {

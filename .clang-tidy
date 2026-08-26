@@ -1,0 +1,51 @@
+# clang-tidy configuration for AmethystTool (M-2 hardening).
+#
+# Scope: run against the compile_commands.json produced by the ninja-multi
+# preset (CMAKE_EXPORT_COMPILE_COMMANDS=ON). HeaderFilterRegex keeps diagnostics
+# on OUR headers only — the FetchContent deps under .deps/ and the protobuf/IPC
+# code under build/generated/ are third-party/generated and out of scope.
+#
+# This is a static-analysis *configuration*, not a gate: it was authored in this
+# pass but not yet run wholesale over the tree (that is a separate cleanup task).
+# WarningsAsErrors is empty so it never blocks a build.
+#
+# Several cppcoreguidelines/modernize checks are disabled deliberately: this is
+# a DLL-injection + inline-hooking codebase, where reinterpret_cast, pointer
+# arithmetic over foreign memory, C-style Win32 varargs and process-wide global
+# hook state are the domain, not code smells. Silencing them keeps the signal on
+# real defects (see cpp-security / cpp-code-quality).
+
+Checks: >
+  bugprone-*,
+  cert-*,
+  concurrency-*,
+  cppcoreguidelines-*,
+  misc-*,
+  performance-*,
+  portability-*,
+  modernize-use-override,
+  modernize-use-nullptr,
+  modernize-use-using,
+  modernize-loop-convert,
+  modernize-make-unique,
+  modernize-make-shared,
+  -modernize-use-trailing-return-type,
+  -cppcoreguidelines-pro-type-reinterpret-cast,
+  -cppcoreguidelines-pro-type-cstyle-cast,
+  -cppcoreguidelines-pro-bounds-pointer-arithmetic,
+  -cppcoreguidelines-pro-bounds-array-to-pointer-decay,
+  -cppcoreguidelines-pro-bounds-constant-array-index,
+  -cppcoreguidelines-pro-type-vararg,
+  -cppcoreguidelines-pro-type-union-access,
+  -cppcoreguidelines-avoid-non-const-global-variables,
+  -cppcoreguidelines-avoid-c-arrays,
+  -cppcoreguidelines-macro-usage,
+  -cppcoreguidelines-pro-type-member-init,
+  -cert-err58-cpp,
+  -misc-non-private-member-variables-in-classes,
+  -misc-no-recursion,
+  -bugprone-easily-swappable-parameters
+
+WarningsAsErrors: ''
+HeaderFilterRegex: '[\\/]src[\\/].*\.(h|hpp)$'
+FormatStyle: file

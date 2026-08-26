@@ -52,8 +52,8 @@ namespace {
     // Routes CloudRedirect's notifications into AmethystTool's log instead of
     // popping a MessageBox from inside Steam.
     void CloudNotify(int level, const char* title, const char* message) {
-        const char* t = title ? title : "CloudRedirect";
-        const char* m = message ? message : "";
+        [[maybe_unused]] const char* t = title ? title : "CloudRedirect";
+        [[maybe_unused]] const char* m = message ? message : "";
         switch (level) {
         case 2:  LOG_ERROR("[CloudRedirect] {}: {}", t, m); break;
         case 1:  LOG_WARN("[CloudRedirect] {}: {}", t, m);  break;

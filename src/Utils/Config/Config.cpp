@@ -214,7 +214,7 @@ namespace {
                      (uint32_t)snapshot.remoteUrlTemplates.size());
             return result;
 
-        } catch (const toml::parse_error& e) {
+        } catch ([[maybe_unused]] const toml::parse_error& e) {
             LOG_WARN("Config parse error: {}", e.what());
         } catch (...) {
             LOG_WARN("Config load failed");
