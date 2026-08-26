@@ -106,6 +106,7 @@ add_library(AmethystTool SHARED
     Utils/Tickets/LegacyCDKey.cpp
     Utils/Tickets/EticketClient.cpp
     Utils/Config/Config.cpp
+    Utils/Config/ConfigMigration.cpp
     Utils/Config/ConfigFileWatcher.cpp
     Utils/Config/LuaConfig.cpp
     Utils/Config/LuaFileWatcher.cpp

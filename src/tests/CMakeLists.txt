@@ -20,9 +20,11 @@
 # Logging is diagnostic only and does not affect the parse/encode/hash results
 # these tests assert, so behaviour under test is identical.
 #
-# Ticket/URI/config parsers (AppTicket, TokeerBridge, Config) are TU-coupled to
-# Lua, the hook engine, WinHTTP and MessageBox and are NOT unit-testable without
+# Ticket/URI/config PARSERS (AppTicket, TokeerBridge, Config::Load) are TU-coupled
+# to Lua, the hook engine, WinHTTP and MessageBox and are NOT unit-testable without
 # an interface extraction — tracked as pending in the report, not forced here.
+# Config::MigrateLegacyConfig is the exception: it depends only on <filesystem>, so
+# it is extracted into its own TU (ConfigMigration.cpp) and covered here directly.
 # ---------------------------------------------------------------------------
 
 include(GTestDep)   # our recipe: GTest::gtest_main / GTest::gmock (/MT)
@@ -36,11 +38,15 @@ add_executable(AmethystToolTests
     encoding_test.cpp
     hash_test.cpp
     fnvhash_test.cpp
+    config_migration_test.cpp
 
     # Units under test, compiled directly (no OSTPlatform lib link) — see header.
     "${_ostp}/Numbers.cpp"
     "${_ostp}/Encoding.cpp"
     "${_ostp}/Windows/Hash.cpp"
+    # ConfigMigration depends only on <filesystem>; compiled directly so the test
+    # stays free of the Lua/toml/WinHTTP coupling of the rest of Utils/Config.
+    "${CMAKE_CURRENT_SOURCE_DIR}/../Utils/Config/ConfigMigration.cpp"
 )
 
 # src/ root for production-style header spellings ("Utils/Support/FnvHash.h",

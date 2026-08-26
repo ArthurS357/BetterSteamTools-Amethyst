@@ -1,6 +1,7 @@
 #include "dllmain.h"
 #include "Hook/HookManager.h"
 #include "Utils/Config/Config.h"
+#include "Utils/Config/ConfigMigration.h"
 #include "Utils/Config/ConfigFileWatcher.h"
 #include "Utils/Config/LuaFileWatcher.h"
 #include "Utils/CloudRedirect/CloudRedirectHost.h"
@@ -56,6 +57,16 @@ static uint32_t InitThread(OSTPlatform::DynamicLibrary::ModuleHandle selfModule)
     if (!InitializeSteamComponents()) {
         LOG_ERROR("InitializeSteamComponents failed");
         return 1;
+    }
+
+    // Carry settings over from the pre-rename config name for users updating
+    // from the upstream project (opensteamtool.toml -> amethysttool.toml).
+    // One-time copy; never overwrites an existing amethysttool.toml.
+    {
+        const std::string legacyConfig =
+            std::string(SteamInstallPath) + "\\opensteamtool.toml";
+        if (Config::MigrateLegacyConfig(ConfigPath, legacyConfig))
+            LOG_INFO("Migrated config from opensteamtool.toml to amethysttool.toml");
     }
 
     Config::Load(ConfigPath);
