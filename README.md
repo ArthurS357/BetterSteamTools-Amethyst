@@ -1,7 +1,7 @@
 <div align="center">
-  <img src="docs/bst.png" width="100%" alt="BetterSteamTools logo">
+  <img src="docs/bst.png" width="100%" alt="AmethystTool logo">
 
-  <h1>BetterSteamTools - a fork of OpenSteamTools!</h1>
+  <h1>AmethystTool - a fork of OpenSteamTools!</h1>
 
   <p>
     <strong>Open-Source Steam Unlock Tool</strong>
@@ -48,21 +48,21 @@
 - Adding, modifying, deleting, or overwriting `.lua` files in any watched directory automatically triggers a reload. No restart, no offline/online toggle needed.
 
 ### Injection
-- Add optional game-process DLL injection through one or more `[[inject]]` entries in `opensteamtool.toml`.
+- Add optional game-process DLL injection through one or more `[[inject]]` entries in `amethysttool.toml`.
 - Each entry sets a `path` (a bare name resolves next to `steam.exe`; an absolute path is used as-is) and optional conditions — `when_cmdline` (substring required in the launch command), `when_appids` (restrict to specific appids), and `all_games` (`true` = every game, `false` = only Lua-added games). A DLL injects when *every* condition it sets matches; multiple entries may target the same game and each DLL injects at most once.
 
 ### Family Sharing and Remote Play
-- Bypass Steam Family Sharing restrictions for games that have been added to the library with `addappid` in Lua. All accounts in the Steam Family that participate in sharing must use OpenSteamTool for this to work.
+- Bypass Steam Family Sharing restrictions for games that have been added to the library with `addappid` in Lua. All accounts in the Steam Family that participate in sharing must use AmethystTool for this to work.
 
 ### Compatible with games protected by Denuvo and SteamStub
-- SteamStub-only games do not require configuring `AppTicket`. OpenSteamTool can reuse Steam's local ConfigStore ticket and forge the requested AppId through a SteamDRMP off-by-four ticket parsing vulnerability, without injecting into the game process.
+- SteamStub-only games do not require configuring `AppTicket`. AmethystTool can reuse Steam's local ConfigStore ticket and forge the requested AppId through a SteamDRMP off-by-four ticket parsing vulnerability, without injecting into the game process.
 
 ### Third-party product keys ("Updating product key")
-- For titles that carry a Steam-issued third-party retail key (Ubisoft Connect, Rockstar, etc.), OpenSteamTool answers the client's legacy key request locally, so the "Updating product key" step completes for added games instead of failing. Supply a real key with `setlegacycdkey(appid, "KEY")`; when none is configured a deterministic synthetic key is generated. A synthetic key satisfies Steam's local step only — titles that validate the key online still require a real one.
-- Denuvo-protected games still require explicit ticket data. OpenSteamTool stores `AppTicket` and `ETicket` through the platform credential store.
+- For titles that carry a Steam-issued third-party retail key (Ubisoft Connect, Rockstar, etc.), AmethystTool answers the client's legacy key request locally, so the "Updating product key" step completes for added games instead of failing. Supply a real key with `setlegacycdkey(appid, "KEY")`; when none is configured a deterministic synthetic key is generated. A synthetic key satisfies Steam's local step only — titles that validate the key online still require a real one.
+- Denuvo-protected games still require explicit ticket data. AmethystTool stores `AppTicket` and `ETicket` through the platform credential store.
 - Use `setAppTicket(appid, "hex")` and `setETicket(appid, "hex")` in Lua config to write these values to the platform credential store automatically.
 - Denuvo verification has a 30-minute validity window. After this window expires, authorization may fail with Denuvo error code `88500005`; refresh the ticket data before retrying.
-- AppTicket priority: explicit tickets have the highest priority, including tickets configured by `setAppTicket` and existing cached `AppTicket` credential values. If no explicit AppTicket is available, OpenSteamTool falls back to the forged local ConfigStore ticket path.
+- AppTicket priority: explicit tickets have the highest priority, including tickets configured by `setAppTicket` and existing cached `AppTicket` credential values. If no explicit AppTicket is available, AmethystTool falls back to the forged local ConfigStore ticket path.
 - SteamID priority: read cached `SteamID` first; if missing, parse from explicit `AppTicket`. On Windows, the credential store backend currently uses `HKCU\Software\Valve\Steam\Apps\<AppId>`. The Linux backend is not implemented yet.
 
 #### Extracting tickets with `extract_tickets`
@@ -95,7 +95,7 @@ The `extract_tickets` tool dumps the `AppTicket` and `ETicket` hex strings you n
 ### Stats and Achievements
 - Enable stats and achievements for unowned games.
 - Uses `setStat(appid, "steamid")` to configure which SteamID's achievement data to pull.
-- If no `setStat` is configured for an app, OpenSteamTool queries `https://stats.opensteamtool.com/{appid}` when `[stats] enable_api = true` (default).
+- If no `setStat` is configured for an app, AmethystTool queries `https://stats.opensteamtool.com/{appid}` when `[stats] enable_api = true` (default).
 - Priority: `setStat` > stats API when enabled and valid > hardcoded preset SteamID `76561198028121353`.
 
 ### Online Fix
@@ -106,7 +106,7 @@ The `extract_tickets` tool dumps the `AppTicket` and `ETicket` hex strings you n
 
 ## Usage
 1. Run `build.bat` from the project root to build the project.
-2. Copy generated `dwmapi.dll`, `xinput1_4.dll` and `OpenSteamTool.dll` to the Steam root directory.
+2. Copy generated `dwmapi.dll`, `xinput1_4.dll` and `AmethystTool.dll` to the Steam root directory.
 3. Create Lua directory (for example `C:\steam\config\lua`) and place Lua scripts there. The DLL will automatically load and execute them.
 4. Lua example:
 ```lua
@@ -136,7 +136,7 @@ All function names are **case-insensitive**. `setAppTicket`, `setappticket`, `Se
 
 ### Configuration (optional)
 
-Rename `opensteamtool.example.toml` to `opensteamtool.toml` and place it in the Steam root directory (next to `steam.exe`).
+Rename `amethysttool.example.toml` to `amethysttool.toml` and place it in the Steam root directory (next to `steam.exe`).
 If no config file is found, built-in defaults are used — no auto-creation.
 The file is watched while Steam is running; valid changes are hot-reloaded without restarting Steam.
 
@@ -169,7 +169,7 @@ paths = []
 # Optional DLL injection into game processes. Each [[inject]] entry is loaded
 # when every condition it sets matches the launch.
 # [[inject]]
-# path = "OpenSteamToolHook.dll"      # bare name resolves next to steam.exe; absolute path used as-is
+# path = "AmethystToolHook.dll"       # bare name resolves next to steam.exe; absolute path used as-is
 # when_cmdline = "-my_special_hook"   # optional: require this substring in the launch command (default: any)
 # when_appids = [1361510]             # optional: restrict to these appids (default: any)
 # all_games = false                   # optional: true injects into every game, false only into Lua-added games (default: false)
@@ -202,17 +202,17 @@ The C++ runtime provides two Lua helpers:
 
 ### Steam version compatibility
 
-OpenSteamTool no longer ships byte-pattern signatures inside the DLL. Instead, on each launch it computes the SHA-256 of `steamclient64.dll` and `steamui.dll` on disk and looks up a matching pattern file from the upstream tracker at [`OpenSteam001/steam-monitor`](https://github.com/OpenSteam001/steam-monitor) (`pattern` branch).
+AmethystTool no longer ships byte-pattern signatures inside the DLL. Instead, on each launch it computes the SHA-256 of `steamclient64.dll` and `steamui.dll` on disk and looks up a matching pattern file from the upstream tracker at [`OpenSteam001/steam-monitor`](https://github.com/OpenSteam001/steam-monitor) (`pattern` branch).
 
 Lookup order (every launch):
 
 1. **GitHub raw** — `https://raw.githubusercontent.com/OpenSteam001/steam-monitor/pattern/...`. Canonical source.
 2. **jsDelivr CDN** — automatic fallback if GitHub raw is unreachable (connection refused / timeout / 5xx). No configuration required. Useful in regions where `raw.githubusercontent.com` is blocked but jsDelivr is reachable (e.g. mainland China).
-3. **Local cache** — `<Steam>\opensteamtool\pattern\<subdir>\<sha256>.toml`. Used **only** when remote is unreachable. The cache is overwritten after every successful remote fetch.
+3. **Local cache** — `<Steam>\amethysttool\pattern\<subdir>\<sha256>.toml`. Used **only** when remote is unreachable. The cache is overwritten after every successful remote fetch.
 
 Remote is consulted on every launch so users automatically pick up upstream re-publications (e.g. the bot adding a new signature, or fixing an existing one) without having to clear any cache.
 
-If a step returns **HTTP 404** the mirror loop stops immediately — all mirrors serve the same content, so a 404 means the upstream bot has not yet published a TOML for this Steam build. The code then falls back to the local cache if one exists; otherwise a one-shot popup appears with the unmatched DLL name, its SHA-256, the expected cache path, and the upstream URL. Only the hooks tied to that DLL are disabled — the rest of OpenSteamTool keeps working.
+If a step returns **HTTP 404** the mirror loop stops immediately — all mirrors serve the same content, so a 404 means the upstream bot has not yet published a TOML for this Steam build. The code then falls back to the local cache if one exists; otherwise a one-shot popup appears with the unmatched DLL name, its SHA-256, the expected cache path, and the upstream URL. Only the hooks tied to that DLL are disabled — the rest of AmethystTool keeps working.
 
 You can also drop a pattern TOML into the cache directory manually if you know the layout for a given build; the file name must be `<sha256>.toml`. The cache fallback will pick it up the next time remote is unreachable.
 
@@ -232,7 +232,7 @@ url_template = "https://your.server/{channel}/{component}/{sha256}.toml"
 
 ### Debug logging
 
-Debug builds write per-module log files under `<Steam>/opensteamtool/`:
+Debug builds write per-module log files under `<Steam>/amethysttool/`:
 
 | File | Source | Content |
 |------|--------|---------|
@@ -252,7 +252,7 @@ Debug builds write per-module log files under `<Steam>/opensteamtool/`:
 | `pipe.log`          | `LOG_PIPE_*` | Pipe handshakes, process inspection, Denuvo authorization, library injection |
 | `platform.log`      | `LOG_PLATFORM_*` | Platform helper diagnostics, including remote-process operations |
 
-The log level is controlled by `[log] level` in `opensteamtool.toml`.
+The log level is controlled by `[log] level` in `amethysttool.toml`.
 
 ## Build
 
@@ -270,8 +270,8 @@ build.bat
 ```
 
 ### Output
-- Debug: `build/Debug/OpenSteamTool.dll`, `build/Debug/dwmapi.dll`, `build/Debug/xinput1_4.dll`
-- Release: `build/Release/OpenSteamTool.dll`, `build/Release/dwmapi.dll`, `build/Release/xinput1_4.dll`
+- Debug: `build/Debug/AmethystTool.dll`, `build/Debug/dwmapi.dll`, `build/Debug/xinput1_4.dll`
+- Release: `build/Release/AmethystTool.dll`, `build/Release/dwmapi.dll`, `build/Release/xinput1_4.dll`
 
 ## Disclaimer
 This project is provided for research and educational purposes only. You are responsible for complying with local laws, platform terms of service, and software licenses.

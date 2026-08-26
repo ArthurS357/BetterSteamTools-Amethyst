@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(OpenSteamToolTools LANGUAGES CXX)
+project(AmethystToolTools LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

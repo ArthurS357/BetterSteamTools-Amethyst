@@ -59,14 +59,14 @@ jobs:
             newest=""
             while read -r v; do
               if [ -n "$v" ] && [ -d "opensteamtool/$v" ]; then newest="$v"; break; fi
-            done < <(git log --diff-filter=A --pretty=format: --name-only -- 'opensteamtool/*/OpenSteamTool.dll' \
-                     | sed -nE 's#^opensteamtool/([^/]+)/OpenSteamTool\.dll$#\1#p')
+            done < <(git log --diff-filter=A --pretty=format: --name-only -- 'opensteamtool/*/AmethystTool.dll' \
+                     | sed -nE 's#^opensteamtool/([^/]+)/AmethystTool\.dll$#\1#p')
 
             if [ -n "$newest" ]; then
-              hash="$(cat "opensteamtool/$newest/OpenSteamTool.dll.sha256")"
+              hash="$(cat "opensteamtool/$newest/AmethystTool.dll.sha256")"
               {
                 echo "version = \"$newest\""
-                echo "path    = \"opensteamtool/$newest/OpenSteamTool.dll\""
+                echo "path    = \"opensteamtool/$newest/AmethystTool.dll\""
                 echo "sha256  = \"$hash\""
               } > opensteamtool/latest.toml
               echo "Repointed latest.toml -> $newest"

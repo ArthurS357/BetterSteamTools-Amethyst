@@ -28,7 +28,7 @@ bool InitializeSteamComponents()
     sprintf_s(SteamUIPath,     kRuntimePathCapacity, "%s\\steamui.dll",        SteamInstallPath);
     sprintf_s(DiversionPath,   kRuntimePathCapacity, "%s\\bin\\diversion.dll", SteamInstallPath);
     sprintf_s(LuaDir,          kRuntimePathCapacity, "%s\\config\\stplug-in",  SteamInstallPath);
-    sprintf_s(ConfigPath,      kRuntimePathCapacity, "%s\\opensteamtool.toml", SteamInstallPath);
+    sprintf_s(ConfigPath,      kRuntimePathCapacity, "%s\\amethysttool.toml", SteamInstallPath);
     
     client_hModule = OSTPlatform::DynamicLibrary::Load(SteamclientPath);
     if (!client_hModule) {
@@ -51,7 +51,7 @@ bool InitializeSteamComponents()
 // any of that from inside DllMain (loader lock).
 static uint32_t InitThread(OSTPlatform::DynamicLibrary::ModuleHandle selfModule) {
     Log::Init(selfModule);
-    LOG_INFO("OpenSteamTool init thread started");
+    LOG_INFO("AmethystTool init thread started");
 
     if (!InitializeSteamComponents()) {
         LOG_ERROR("InitializeSteamComponents failed");
@@ -91,9 +91,16 @@ static uint32_t InitThread(OSTPlatform::DynamicLibrary::ModuleHandle selfModule)
     // [cloud].enabled is set and cloud_redirect.dll is present.
     CloudRedirectHost::Initialize(SteamInstallPath);
 
-    // Register the bst:// URI scheme so the website can drive code redemption via this
-    // DLL (rundll32 handler). HKCU, no admin; idempotent.
-    TokeerBridge::RegisterUriScheme(std::string(SteamInstallPath) + "\\OpenSteamTool.dll");
+    // Register the amethysttool:// URI scheme so the website can drive code redemption via this
+    // DLL (rundll32 handler). HKCU, no admin; idempotent. Only registered when the build
+    // is configured with a Tokeer code server (OST_TOKEER_URL) — otherwise redemption is
+    // inert (see TokeerBridge::Redeem) and registering the handler would just add attack
+    // surface (a site-invocable protocol handler) with no corresponding feature enabled.
+#if defined(OST_TOKEER_URL)
+    TokeerBridge::RegisterUriScheme(std::string(SteamInstallPath) + "\\AmethystTool.dll");
+#else
+    LOG_INFO("OST_TOKEER_URL unset; amethysttool:// protocol handler not registered");
+#endif
 
     // Self-update — DISABLED BY DEFAULT in the Amethyst fork (compiled out).
     //
@@ -111,7 +118,7 @@ static uint32_t InitThread(OSTPlatform::DynamicLibrary::ModuleHandle selfModule)
 #if defined(OST_ENABLE_AUTOUPDATE)
     if (Config::GetUpdateEnabled()) {
         OSTPlatform::Thread::StartDetached([] () -> uint32_t {
-            const std::string self = std::string(SteamInstallPath) + "\\OpenSteamTool.dll";
+            const std::string self = std::string(SteamInstallPath) + "\\AmethystTool.dll";
             AppUpdater::CleanupStagedBackup(self);
 
             const AppUpdater::CheckResult upd = AppUpdater::Check();
@@ -119,7 +126,7 @@ static uint32_t InitThread(OSTPlatform::DynamicLibrary::ModuleHandle selfModule)
             if (!AppUpdater::DownloadAndStage(upd, self)) return 0;
 
             const bool restart = OSTPlatform::Dialog::ShowConfirm(
-                "BetterSteamTools Updated!",
+                "AmethystTool Updated!",
                 upd.oldVersion + " -> " + upd.newVersion +
                 "\n\nRestart Steam now to apply?");
             if (restart) AppUpdater::RestartSteam();
@@ -130,12 +137,12 @@ static uint32_t InitThread(OSTPlatform::DynamicLibrary::ModuleHandle selfModule)
     // (When OST_ENABLE_AUTOUPDATE is undefined, Config::GetUpdateEnabled() is still
     //  parsed from the TOML for compatibility but has no effect — no self-update.)
 
-    LOG_INFO("OpenSteamTool init complete");
+    LOG_INFO("AmethystTool init complete");
     return 0;
 }
 
 // True only when the host process is steam.exe. The proxy DLLs already gate injection to
-// Steam, but rundll32 loads this DLL directly to service a bst:// link — there we must NOT
+// Steam, but rundll32 loads this DLL directly to service an amethysttool:// link — there we must NOT
 // run the Steam-injection machinery (steamclient load, hooks, watchers); the TokeerUri
 // export does its work standalone.
 static bool IsSteamHost()
@@ -153,7 +160,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD dwReason, PVOID pvReserved)
     {
         DisableThreadLibraryCalls(hModule);
         if (!IsSteamHost())
-            return TRUE;   // e.g. rundll32 bst:// handler — no injection here
+            return TRUE;   // e.g. rundll32 amethysttool:// handler — no injection here
         // Hand off all real work to a worker thread to avoid running file I/O,
         // module loading and detour transactions under the loader lock.
         OSTPlatform::Thread::StartDetached([module = reinterpret_cast<OSTPlatform::DynamicLibrary::ModuleHandle>(hModule)] {

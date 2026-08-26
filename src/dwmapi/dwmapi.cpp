@@ -109,10 +109,10 @@
 #pragma comment(linker, "/EXPORT:#187=DWMAPI.#187,@187,NONAME")
 
 // Only inject when the host process is steam.exe (case-insensitive).
-// LoadLibraryA itself guarantees that OpenSteamTool.dll's DllMain
+// LoadLibraryA itself guarantees that AmethystTool.dll's DllMain
 // runs at most once per process, so multiple hijack DLLs can safely
 // call this without additional synchronisation.
-BOOL OpenSteamToolLoad()
+BOOL AmethystToolLoad()
 {
     char exePath[MAX_PATH];
     if (GetModuleFileNameA(NULL, exePath, MAX_PATH))
@@ -122,7 +122,7 @@ BOOL OpenSteamToolLoad()
         if (_stricmp(exeName, "steam.exe") != 0)
             return TRUE;   // not Steam — let the proxy load, but don't inject
     }
-    return LoadLibraryA("OpenSteamTool.dll") != NULL;
+    return LoadLibraryA("AmethystTool.dll") != NULL;
 }
 
 
@@ -133,7 +133,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD dwReason, PVOID pvReserved)
     case DLL_PROCESS_ATTACH:
         {
             DisableThreadLibraryCalls(hModule);
-            if ( !OpenSteamToolLoad() )
+            if ( !AmethystToolLoad() )
                 return FALSE;
             break;
         }

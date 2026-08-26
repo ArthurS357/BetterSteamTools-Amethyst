@@ -119,15 +119,15 @@ extern "C" {
     }
 }
 
-// ─── 4. OpenSteamTool Injection ───────────────────────────────────
-BOOL OpenSteamToolLoad() {
+// ─── 4. AmethystTool Injection ───────────────────────────────────
+BOOL AmethystToolLoad() {
     char exePath[MAX_PATH];
     if (GetModuleFileNameA(NULL, exePath, MAX_PATH)) {
         const char* exeName = strrchr(exePath, '\\');
         exeName = exeName ? exeName + 1 : exePath;
         if (_stricmp(exeName, "steam.exe") != 0) return TRUE;
     }
-    return LoadLibraryA("OpenSteamTool.dll") != NULL;
+    return LoadLibraryA("AmethystTool.dll") != NULL;
 }
 
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD dwReason, PVOID pvReserved) {
@@ -135,7 +135,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD dwReason, PVOID pvReserved) {
     case DLL_PROCESS_ATTACH:
         DisableThreadLibraryCalls(hModule);
         LoadRealXInput();
-        if (!OpenSteamToolLoad()) return FALSE;
+        if (!AmethystToolLoad()) return FALSE;
         break;
     }
     return TRUE;

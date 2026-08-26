@@ -1,5 +1,5 @@
-# opensteamtool.toml — OpenSteamTool configuration
-# Place at: <Steam>/opensteamtool.toml
+# amethysttool.toml — AmethystTool configuration
+# Place at: <Steam>/amethysttool.toml
 # This file is loaded at startup and hot-reloaded after changes.
 
 [log]
@@ -86,7 +86,7 @@ enabled = false
 # when every condition it sets matches the launch.
 # Example:
 #   [[inject]]
-#   path = "OpenSteamToolHook.dll"      # bare name resolves next to steam.exe; absolute path used as-is
+#   path = "AmethystToolHook.dll"       # bare name resolves next to steam.exe; absolute path used as-is
 #   when_cmdline = "-my_special_hook"   # optional: require this substring in the launch command (default: any)
 #   when_appids = [1361510]             # optional: restrict to these appids (default: any)
 #   all_games = false                   # optional: true injects into every game, false only into Lua-added games (default: false)
@@ -94,12 +94,12 @@ enabled = false
 [cloud]
 # Optional Steam Cloud save redirection for unlocked ("lua") games, powered by
 # CloudRedirect (https://github.com/Selectively11/CloudRedirect).
-# When enabled, OpenSteamTool loads cloud_redirect.dll inside Steam, registers
+# When enabled, AmethystTool loads cloud_redirect.dll inside Steam, registers
 # every addappid() game as a redirected app, and routes their Steam Cloud RPCs
 # through CloudRedirect's cloud-save engine.
 #
 # Provider sign-in (Google Drive / OneDrive / local folder) is still done through
-# CloudRedirect's own companion app — OpenSteamTool only hosts the DLL.
+# CloudRedirect's own companion app — AmethystTool only hosts the DLL.
 enabled = false
 # Path to cloud_redirect.dll. Absolute, or relative to the Steam root directory.
 # Defaults to "<Steam>/cloud_redirect.dll" when unset.

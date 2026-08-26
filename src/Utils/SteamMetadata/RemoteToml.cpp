@@ -99,7 +99,7 @@ Result Fetch(const Request& request)
 
     // 2. Cache path & dir.
     fs::path steamRoot = fs::path(request.dllPath).parent_path();
-    fs::path cacheDir  = steamRoot / "opensteamtool" / request.channel / request.component;
+    fs::path cacheDir  = steamRoot / "amethysttool" / request.channel / request.component;
     fs::path cachePath = cacheDir / (out.sha256 + ".toml");
     const std::string cachePathText = cachePath.string();
 
@@ -180,8 +180,13 @@ Result Fetch(const Request& request)
         return out;
     }
 
-    // 6. Remote failed → fall back to whatever is cached for this exact SHA (covers
-    //    a cache file that existed but was empty at step 3).
+    // 6. Remote failed → fall back to whatever is cached for this exact SHA. Covers
+    //    two cases: a cache file that was empty at step 3, and — the reason this
+    //    read-back is not redundant — a cache file that existed but could not be
+    //    opened at step 3 (e.g. a transient share/lock on Windows: fs::exists() was
+    //    true but the ifstream failed to open, so emptiness was never confirmed) yet
+    //    is readable now. Recovering a readable non-empty cache keeps startup working
+    //    in degraded mode when the network is unavailable.
     if (fs::exists(cachePath)) {
         LOG_WARN("RemoteToml({}/{}): remote failed (last URL {} HTTP {}); "
                  "falling back to local cache {}",

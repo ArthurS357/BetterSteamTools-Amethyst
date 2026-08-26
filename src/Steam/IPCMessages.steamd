@@ -1,4 +1,4 @@
-// IPCMessages.steamd - Steam IPC wire schema for OpenSteamTool.
+// IPCMessages.steamd - Steam IPC wire schema for AmethystTool.
 //
 // This file is the source of truth for IPC enums, transport envelopes, and
 // per-method bodies. Generated Req/Resp facades hide the envelope split from

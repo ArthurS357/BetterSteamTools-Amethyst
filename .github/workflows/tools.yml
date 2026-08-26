@@ -16,7 +16,7 @@ jobs:
       - name: Configure
         run: cmake -S src -B build -G "Ninja Multi-Config"
 
-      # Build only the host tool targets, not the OpenSteamTool DLL.
+      # Build only the host tool targets, not the AmethystTool DLL.
       - name: Build Release
         run: cmake --build build --config Release --target ipc_codegen extract_tickets
 
@@ -26,11 +26,11 @@ jobs:
       - name: Upload Release artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: OpenSteamTool-Tools-Release
+          name: AmethystTool-Tools-Release
           path: build/tools/Release/
 
       - name: Upload Debug artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: OpenSteamTool-Tools-Debug
+          name: AmethystTool-Tools-Debug
           path: build/tools/Debug/

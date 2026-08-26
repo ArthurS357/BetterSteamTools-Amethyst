@@ -14,7 +14,7 @@ namespace CloudRedirectHost {
 namespace {
 
     // --- CloudRedirect third-party client ABI (CloudRedirect/src/common/cr_api.h)
-    // Declared locally so OpenSteamTool does not need CloudRedirect's headers.
+    // Declared locally so AmethystTool does not need CloudRedirect's headers.
     using CR_NotifyFn        = void (*)(int level, const char* title, const char* message);
     using CR_InitCloudSave_t = bool (*)(const char* steamPath, CR_NotifyFn notify);
     using CR_HandleCloudRpc_t = bool (*)(const char* method, uint32_t appId, uint32_t accountId,
@@ -49,7 +49,7 @@ namespace {
     CR_GetAchievements_t    g_getAchievements    = nullptr;
     CR_InstallVtableHooks_t g_installVtableHooks = nullptr;
 
-    // Routes CloudRedirect's notifications into OpenSteamTool's log instead of
+    // Routes CloudRedirect's notifications into AmethystTool's log instead of
     // popping a MessageBox from inside Steam.
     void CloudNotify(int level, const char* title, const char* message) {
         const char* t = title ? title : "CloudRedirect";

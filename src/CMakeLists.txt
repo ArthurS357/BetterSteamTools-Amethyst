@@ -1,10 +1,10 @@
 cmake_minimum_required(VERSION 3.20)
-project(OpenSteamTool VERSION 1.0.0 LANGUAGES C CXX)
+project(AmethystTool VERSION 1.0.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_C_STANDARD 11)
-set(OPENSTEAMTOOL_VERSION "${PROJECT_VERSION}" CACHE STRING "Version string embedded into OpenSteamTool.dll")
+set(OPENSTEAMTOOL_VERSION "${PROJECT_VERSION}" CACHE STRING "Version string embedded into AmethystTool.dll")
 
 # Allow CMAKE_MSVC_RUNTIME_LIBRARY to control runtime selection for all targets,
 # including dependencies pulled in via FetchContent.
@@ -21,7 +21,7 @@ set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 
 
 if(NOT WIN32)
-    message(STATUS "OpenSteamTool: no targets on non-Windows platforms; skipping.")
+    message(STATUS "AmethystTool: no targets on non-Windows platforms; skipping.")
     return()
 endif()
 
@@ -97,8 +97,8 @@ add_subdirectory(OSTPlatform)
 # All Windows-only by construction (PE DLL hijacking + Win32 hooking).
 # ---------------------------------------------------------------------------
 
-# OpenSteamTool — the hook DLL injected into Steam (always 64-bit).
-add_library(OpenSteamTool SHARED
+# AmethystTool — the hook DLL injected into Steam (always 64-bit).
+add_library(AmethystTool SHARED
     dllmain.cpp
 
     # Shared utilities
@@ -154,13 +154,13 @@ add_library(OpenSteamTool SHARED
 )
 
 # Header search path — per-config include directory
-target_include_directories(OpenSteamTool PRIVATE
+target_include_directories(AmethystTool PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_BINARY_DIR}/generated
     ${CMAKE_CURRENT_BINARY_DIR}/generated/$<CONFIG>
 )
 
-target_link_libraries(OpenSteamTool PRIVATE
+target_link_libraries(AmethystTool PRIVATE
     OSTPlatform
     lua_static
     $<$<CONFIG:Debug>:libprotobuf>
@@ -171,7 +171,7 @@ target_link_libraries(OpenSteamTool PRIVATE
 )
 
 # Logging is compiled in only for Debug; Release reduces LOG_* to no-ops.
-target_compile_definitions(OpenSteamTool PRIVATE
+target_compile_definitions(AmethystTool PRIVATE
     $<$<CONFIG:Debug>:OPENSTEAMTOOL_LOGGING_ENABLED>
 )
 
@@ -187,18 +187,18 @@ target_compile_definitions(OpenSteamTool PRIVATE
 set(OST_ETICKET_URL "" CACHE STRING
     "Backend URL for on-demand eticket minting (empty disables the feature)")
 if(OST_ETICKET_URL)
-    target_compile_definitions(OpenSteamTool PRIVATE
+    target_compile_definitions(AmethystTool PRIVATE
         OST_ETICKET_URL="${OST_ETICKET_URL}")
 endif()
 
-# Base URL of the Tokeer code server used by the bst:// bridge (code redemption).
-# Empty by default (Amethyst fork): the bst:// redeem action is inert and makes no
+# Base URL of the Tokeer code server used by the amethysttool:// bridge (code redemption).
+# Empty by default (Amethyst fork): the amethysttool:// redeem action is inert and makes no
 # network request unless you point the build at your own server.
 #   cmake -B build -DOST_TOKEER_URL="https://your-host"
 set(OST_TOKEER_URL "" CACHE STRING
-    "Base URL for the Tokeer code server (bst:// bridge); empty disables redemption")
+    "Base URL for the Tokeer code server (amethysttool:// bridge); empty disables redemption")
 if(OST_TOKEER_URL)
-    target_compile_definitions(OpenSteamTool PRIVATE
+    target_compile_definitions(AmethystTool PRIVATE
         OST_TOKEER_URL="${OST_TOKEER_URL}")
 endif()
 

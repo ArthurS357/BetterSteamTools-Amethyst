@@ -1,4 +1,4 @@
-// ipc_codegen - Steam IPC IDL to C++ generator for OpenSteamTool.
+// ipc_codegen - Steam IPC IDL to C++ generator for AmethystTool.
 //
 // Usage: ipc_codegen <input.steamd> <output.gen.h>
 //

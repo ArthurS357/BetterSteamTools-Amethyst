@@ -56,7 +56,7 @@ namespace Config {
     // [log]
     inline LogLevel logLevel = LogLevel::Debug;
 
-    // derived from configPath: <steam>/opensteamtool/
+    // derived from configPath: <steam>/amethysttool/
     inline std::string logDir;
 
     // [lua]

@@ -1,5 +1,5 @@
 // proto/steam_messages.proto
-// Steam protobuf response message definitions for OpenSteamTool.
+// Steam protobuf response message definitions for AmethystTool.
 
 syntax = "proto2";
 

@@ -14,7 +14,7 @@ namespace SteamDiagnostics {
 namespace {
 
     struct Snapshot {
-        std::string openSteamToolVersion = OPENSTEAMTOOL_VERSION;
+        std::string amethystToolVersion = OPENSTEAMTOOL_VERSION;
         std::string buildID = "(unavailable)";
         std::string steamclientPath;
         std::string steamclientSha256 = "(unavailable)";
@@ -55,7 +55,7 @@ namespace {
     {
         message +=
             "\n\nSteam diagnostics:\n"
-            "  OpenSteamTool version: " + g_snapshot.openSteamToolVersion + "\n"
+            "  AmethystTool version: " + g_snapshot.amethystToolVersion + "\n"
             "  Build ID:              " + g_snapshot.buildID + "\n"
             "  steamclient64.dll SHA: " + g_snapshot.steamclientSha256 + "\n"
             "  steamui.dll SHA:       " + g_snapshot.steamUISha256;
@@ -74,7 +74,7 @@ void Initialize(const std::string& steamclientPath,
     g_snapshot.steamUISha256 = HashOrUnavailable(steamUIPath);
 
     LOG_INFO("SteamDiagnostics: ost.version={} build={} steamclient64.sha256={} steamui.sha256={}",
-             g_snapshot.openSteamToolVersion,
+             g_snapshot.amethystToolVersion,
              g_snapshot.buildID,
              g_snapshot.steamclientSha256,
              g_snapshot.steamUISha256);

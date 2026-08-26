@@ -1,7 +1,7 @@
 <div align="center">
-  <img src="docs/bst.png" width="100%" alt="BetterSteamTools logo">
+  <img src="docs/bst.png" width="100%" alt="AmethystTool logo">
 
-  <h1>BetterSteamTools - a fork of OpenSteamTools!</h1>
+  <h1>AmethystTool - a fork of OpenSteamTools!</h1>
 
   <p>
     <strong>开源 Steam 解锁工具</strong>
@@ -48,18 +48,18 @@
 - 在任何监视目录中添加、修改、删除或覆盖 `.lua` 文件会自动触发重载。无需重启，无需切换离线/在线模式
 
 ### 注入
-- 通过 `opensteamtool.toml` 中的一个或多个 `[[inject]]` 条目添加可选的游戏进程 DLL 注入
+- 通过 `amethysttool.toml` 中的一个或多个 `[[inject]]` 条目添加可选的游戏进程 DLL 注入
 - 每个条目设置 `path`（裸文件名相对于 `steam.exe` 解析，绝对路径按原样使用）和可选条件——`when_cmdline`（启动命令中必须包含的子字符串）、`when_appids`（限定特定 appid）和 `all_games`（`true` = 所有游戏，`false` = 仅 Lua 添加的游戏）。当某个 DLL 设置的*所有*条件都匹配时才注入；多个条目可以指向同一游戏，每个 DLL 最多注入一次
 
 ### 家庭共享和远程同乐
-- 绕过 Steam 家庭共享限制，适用于通过 Lua 中 `addappid` 添加到库的游戏。参与共享的 Steam 家庭中的所有账户都必须使用 OpenSteamTool 才能生效
+- 绕过 Steam 家庭共享限制，适用于通过 Lua 中 `addappid` 添加到库的游戏。参与共享的 Steam 家庭中的所有账户都必须使用 AmethystTool 才能生效
 
 ### 兼容 Denuvo 和 SteamStub 保护的游戏
-- 仅 SteamStub 保护的游戏不需要配置 `AppTicket`。OpenSteamTool 可以重用 Steam 本地 ConfigStore 令牌，通过 SteamDRMP 令牌解析漏洞伪造请求的 AppId，无需注入游戏进程
-- Denuvo 保护的游戏仍需要显式令牌数据。OpenSteamTool 通过平台凭据存储保存 `AppTicket` 和 `ETicket`
+- 仅 SteamStub 保护的游戏不需要配置 `AppTicket`。AmethystTool 可以重用 Steam 本地 ConfigStore 令牌，通过 SteamDRMP 令牌解析漏洞伪造请求的 AppId，无需注入游戏进程
+- Denuvo 保护的游戏仍需要显式令牌数据。AmethystTool 通过平台凭据存储保存 `AppTicket` 和 `ETicket`
 - 在 Lua 配置中使用 `setAppTicket(appid, "hex")` 和 `setETicket(appid, "hex")` 自动将这些值写入平台凭据存储
 - Denuvo 验证有 30 分钟有效窗口。过期后授权可能失败，显示 Denuvo 错误代码 `88500005`；重试前请刷新令牌数据
-- AppTicket 优先级：显式令牌优先级最高，包括通过 `setAppTicket` 配置的令牌和已缓存的 `AppTicket` 凭据值。若无可用显式 AppTicket，OpenSteamTool 回退到伪造的本地 ConfigStore 令牌路径
+- AppTicket 优先级：显式令牌优先级最高，包括通过 `setAppTicket` 配置的令牌和已缓存的 `AppTicket` 凭据值。若无可用显式 AppTicket，AmethystTool 回退到伪造的本地 ConfigStore 令牌路径
 - SteamID 优先级：优先读取缓存的 `SteamID`；若缺失，则从显式 `AppTicket` 解析。在 Windows 上，凭据存储后端当前使用 `HKCU\Software\Valve\Steam\Apps\<AppId>`。Linux 后端尚未实现
 
 #### 使用 `extract_tickets` 提取令牌
@@ -92,7 +92,7 @@
 ### 统计和成就
 - 为未拥有的游戏启用统计和成就
 - 使用 `setStat(appid, "steamid")` 配置拉取哪个 SteamID 的成就数据
-- 如果某个应用未配置 `setStat`，当 `[stats] enable_api = true`（默认）时，OpenSteamTool 查询 `https://stats.opensteamtool.com/{appid}`
+- 如果某个应用未配置 `setStat`，当 `[stats] enable_api = true`（默认）时，AmethystTool 查询 `https://stats.opensteamtool.com/{appid}`
 - 优先级：`setStat` > stats API（启用且有效时）> 硬编码预设 SteamID `76561198028121353`
 
 ### 在线修复
@@ -104,7 +104,7 @@
 ## 使用方法
 
 1. 在项目根目录运行 `build.bat` 构建项目
-2. 将生成的 `dwmapi.dll`、`xinput1_4.dll` 和 `OpenSteamTool.dll` 复制到 Steam 根目录
+2. 将生成的 `dwmapi.dll`、`xinput1_4.dll` 和 `AmethystTool.dll` 复制到 Steam 根目录
 3. 创建 Lua 目录（例如 `C:\steam\config\lua`）并将 Lua 脚本放在那里。DLL 会自动加载并执行它们
 4. Lua 示例：
 ```lua
@@ -131,7 +131,7 @@ setStat(1361510, "76561197960287930") -- 使用指定 SteamID 的成就数据用
 
 ### 配置（可选）
 
-将 `opensteamtool.example.toml` 重命名为 `opensteamtool.toml` 并放在 Steam 根目录（与 `steam.exe` 同级）。
+将 `amethysttool.example.toml` 重命名为 `amethysttool.toml` 并放在 Steam 根目录（与 `steam.exe` 同级）。
 若找不到配置文件，则使用内置默认值——不会自动创建。
 文件在 Steam 运行时被监视；有效更改会热重载，无需重启 Steam。
 
@@ -163,7 +163,7 @@ paths = []
 
 # 可选的游戏进程 DLL 注入。当某个 [[inject]] 条目设置的所有条件都匹配时加载该 DLL。
 # [[inject]]
-# path = "OpenSteamToolHook.dll"      # 裸文件名相对于 steam.exe 解析；绝对路径按原样使用
+# path = "AmethystToolHook.dll"       # 裸文件名相对于 steam.exe 解析；绝对路径按原样使用
 # when_cmdline = "-my_special_hook"   # 可选：要求启动命令中包含此子字符串（默认：任意）
 # when_appids = [1361510]             # 可选：仅限这些 appid（默认：任意）
 # all_games = false                   # 可选：true 注入到所有游戏，false 仅注入到 Lua 添加的游戏（默认：false）
@@ -196,17 +196,17 @@ C++ 运行时提供两个 Lua 辅助函数：
 
 ### Steam 版本兼容性
 
-OpenSteamTool 不再在 DLL 中内置字节模式签名。相反，每次启动时它计算磁盘上 `steamclient64.dll` 和 `steamui.dll` 的 SHA-256，并从上游跟踪器 [`OpenSteam001/steam-monitor`](https://github.com/OpenSteam001/steam-monitor)（`pattern` 分支）查找匹配的模式文件
+AmethystTool 不再在 DLL 中内置字节模式签名。相反，每次启动时它计算磁盘上 `steamclient64.dll` 和 `steamui.dll` 的 SHA-256，并从上游跟踪器 [`OpenSteam001/steam-monitor`](https://github.com/OpenSteam001/steam-monitor)（`pattern` 分支）查找匹配的模式文件
 
 查找顺序（每次启动）：
 
 1. **GitHub raw** — `https://raw.githubusercontent.com/OpenSteam001/steam-monitor/pattern/...`。规范来源
 2. **jsDelivr CDN** — 如果 GitHub raw 无法访问（连接拒绝/超时/5xx）时自动回退。无需配置。在 `raw.githubusercontent.com` 被封锁但 jsDelivr 可访问的地区很有用（如中国大陆）
-3. **本地缓存** — `<Steam>\opensteamtool\pattern\<subdir>\<sha256>.toml`。仅当远程不可达时使用。每次成功远程获取后覆盖缓存
+3. **本地缓存** — `<Steam>\amethysttool\pattern\<subdir>\<sha256>.toml`。仅当远程不可达时使用。每次成功远程获取后覆盖缓存
 
 每次启动都会咨询远程，因此用户自动获取上游重新发布（例如机器人添加新签名或修复现有签名），无需清除任何缓存
 
-如果某步返回 **HTTP 404**，镜像循环立即停止——所有镜像提供相同内容，因此 404 意味着上游机器人尚未为此 Steam 版本发布 TOML。代码然后回退到本地缓存（如果存在）；否则出现一次性弹窗，显示不匹配的 DLL 名称、其 SHA-256、预期缓存路径和上游 URL。仅禁用与该 DLL 相关的钩子——OpenSteamTool 的其余部分继续工作
+如果某步返回 **HTTP 404**，镜像循环立即停止——所有镜像提供相同内容，因此 404 意味着上游机器人尚未为此 Steam 版本发布 TOML。代码然后回退到本地缓存（如果存在）；否则出现一次性弹窗，显示不匹配的 DLL 名称、其 SHA-256、预期缓存路径和上游 URL。仅禁用与该 DLL 相关的钩子——AmethystTool 的其余部分继续工作
 
 如果你知道给定版本的布局，也可以手动将模式 TOML 放入缓存目录；文件名必须为 `<sha256>.toml`。下次远程不可达时缓存回退会拾取它
 
@@ -226,7 +226,7 @@ url_template = "https://your.server/{channel}/{component}/{sha256}.toml"
 
 ### 调试日志
 
-调试构建在 `<Steam>/opensteamtool/` 下写入每个模块的日志文件：
+调试构建在 `<Steam>/amethysttool/` 下写入每个模块的日志文件：
 
 | 文件 | 来源 | 内容 |
 |------|------|------|
@@ -246,7 +246,7 @@ url_template = "https://your.server/{channel}/{component}/{sha256}.toml"
 | `pipe.log` | `LOG_PIPE_*` | 管道握手、进程检查、Denuvo 授权、库注入 |
 | `platform.log` | `LOG_PLATFORM_*` | 平台助手诊断，包括远程进程操作 |
 
-日志级别由 `opensteamtool.toml` 中的 `[log] level` 控制
+日志级别由 `amethysttool.toml` 中的 `[log] level` 控制
 
 ## 构建
 
@@ -264,8 +264,8 @@ build.bat
 ```
 
 ### 输出
-- Debug：`build/Debug/OpenSteamTool.dll`、`build/Debug/dwmapi.dll`、`build/Debug/xinput1_4.dll`
-- Release：`build/Release/OpenSteamTool.dll`、`build/Release/dwmapi.dll`、`build/Release/xinput1_4.dll`
+- Debug：`build/Debug/AmethystTool.dll`、`build/Debug/dwmapi.dll`、`build/Debug/xinput1_4.dll`
+- Release：`build/Release/AmethystTool.dll`、`build/Release/dwmapi.dll`、`build/Release/xinput1_4.dll`
 
 ## 免责声明
 本项目仅供研究和教育目的使用。你负责遵守当地法律、平台服务条款和软件许可证。

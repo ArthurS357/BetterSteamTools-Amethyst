@@ -6,8 +6,8 @@
 // Log::InitModules()  — creates per-module loggers + applies Config level
 //                       to all loggers. Call after Config::Load().
 //
-// General macros  →  <steam>/opensteamtool/main.log
-// Module macros   →  <steam>/opensteamtool/<module>.log
+// General macros  →  <steam>/amethysttool/main.log
+// Module macros   →  <steam>/amethysttool/<module>.log
 //
 // Adding a new module logger:
 //   1. Add  OST_MOD(NewMod, "newmod")  in LogModules.def.

@@ -19,7 +19,7 @@
 // the fork ships no upstream deployment's backend and stays independent; point a build
 // at your own server with:
 //   cmake -B build -DOST_TOKEER_URL="https://your-host"
-// When empty, the bst:// redeem action is inert (no network request is made).
+// When empty, the amethysttool:// redeem action is inert (no network request is made).
 #ifndef OST_TOKEER_URL
 #define OST_TOKEER_URL ""
 #endif
@@ -28,7 +28,7 @@ namespace TokeerBridge {
 
 namespace {
 
-    constexpr const char* kUriScheme = "bst";
+    constexpr const char* kUriScheme = "amethysttool";
 
     int HexNibble(char c) {
         if (c >= '0' && c <= '9') return c - '0';
@@ -96,7 +96,7 @@ void Redeem(const std::string& code) {
         // No code server configured in this build (default for the Amethyst fork).
         // Do not fabricate a request against a relative URL — the feature is off.
         LOG_INFO("TokeerBridge: redeem requested but OST_TOKEER_URL is unset; feature disabled");
-        Warn("BetterSteamTools", "Code redemption is not configured in this build.");
+        Warn("AmethystTool", "Code redemption is not configured in this build.");
         return;
     }
 
@@ -113,7 +113,7 @@ void Redeem(const std::string& code) {
         if (!JsonString(r.body, "reason", reason) && !JsonString(r.body, "error", reason))
             reason = "Server error " + std::to_string(r.status);
         LOG_WARN("TokeerBridge: redeem failed (HTTP {}): {}", r.status, reason);
-        Warn("BetterSteamTools", "Redeem failed:\n\n" + reason);
+        Warn("AmethystTool", "Redeem failed:\n\n" + reason);
         return;
     }
 
@@ -127,14 +127,14 @@ void Redeem(const std::string& code) {
     const auto etBytes = HexToBytes(etHex);
     if (!appId || !appBytes || appBytes->empty() || !etBytes || etBytes->empty()) {
         LOG_WARN("TokeerBridge: redeem returned an incomplete/invalid ticket");
-        Warn("BetterSteamTools", "The server returned an incomplete ticket.");
+        Warn("AmethystTool", "The server returned an incomplete ticket.");
         return;
     }
 
     if (CS::WriteAppTicket(*appId, *appBytes) != CS::Status::Ok ||
         CS::WriteETicket(*appId, *etBytes) != CS::Status::Ok) {
         LOG_ERROR("TokeerBridge: failed to write tickets for app {}", *appId);
-        Warn("BetterSteamTools", "Could not write the ticket to Steam.");
+        Warn("AmethystTool", "Could not write the ticket to Steam.");
         return;
     }
 
@@ -168,7 +168,7 @@ void HandleUri(const std::string& rawUrl) {
          (url.front() == '\'' && url.back() == '\'')))
         url = url.substr(1, url.size() - 2);
 
-    // Accept "bst://action/arg" (and a stray trailing slash). Strip the scheme.
+    // Accept "amethysttool://action/arg" (and a stray trailing slash). Strip the scheme.
     const std::string prefix = std::string(kUriScheme) + "://";
     if (url.rfind(prefix, 0) != 0) {
         LOG_WARN("TokeerBridge: ignoring non-{} URL (cleaned='{}')", kUriScheme, url);
@@ -185,14 +185,14 @@ void HandleUri(const std::string& rawUrl) {
 
     if (action == "redeem") {
         if (!arg.empty()) Redeem(arg);
-        else Warn("BetterSteamTools", "Missing code in link.");
+        else Warn("AmethystTool", "Missing code in link.");
     } else {
         LOG_WARN("TokeerBridge: unknown action '{}'", action);
     }
 }
 
 void RegisterUriScheme(const std::string& dllPath) {
-    // HKCU\Software\Classes\bst  (URL Protocol) ; \shell\open\command -> rundll32 handler.
+    // HKCU\Software\Classes\amethysttool  (URL Protocol) ; \shell\open\command -> rundll32 handler.
     const std::string command =
         "rundll32.exe \"" + dllPath + "\",TokeerUri \"%1\"";
 
@@ -209,12 +209,12 @@ void RegisterUriScheme(const std::string& dllPath) {
     };
 
     const bool ok =
-        writeKey("Software\\Classes\\bst", nullptr, "URL:BetterSteamTools") &&
-        writeKey("Software\\Classes\\bst", "URL Protocol", "") &&
-        writeKey("Software\\Classes\\bst\\shell\\open\\command", nullptr, command);
+        writeKey("Software\\Classes\\amethysttool", nullptr, "URL:AmethystTool") &&
+        writeKey("Software\\Classes\\amethysttool", "URL Protocol", "") &&
+        writeKey("Software\\Classes\\amethysttool\\shell\\open\\command", nullptr, command);
 
-    if (ok) LOG_INFO("TokeerBridge: registered bst:// scheme -> {}", command);
-    else    LOG_WARN("TokeerBridge: failed to register bst:// scheme");
+    if (ok) LOG_INFO("TokeerBridge: registered amethysttool:// scheme -> {}", command);
+    else    LOG_WARN("TokeerBridge: failed to register amethysttool:// scheme");
 }
 
 } // namespace TokeerBridge

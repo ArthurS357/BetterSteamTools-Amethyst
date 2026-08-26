@@ -34,7 +34,7 @@ jobs:
           $ErrorActionPreference = 'Continue'
           $ver  = "${{ github.event.inputs.version }}"
           $repo = "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git"
-          $hash = (Get-FileHash ".\build\Release\OpenSteamTool.dll" -Algorithm SHA256).Hash.ToLower()
+          $hash = (Get-FileHash ".\build\Release\AmethystTool.dll" -Algorithm SHA256).Hash.ToLower()
 
           git clone --branch updates --single-branch $repo pub
           if (-not (Test-Path pub/.git)) {   # first run: create the orphan branch
@@ -48,11 +48,11 @@ jobs:
 
           $dir = "pub/opensteamtool/$ver"
           New-Item -ItemType Directory -Force $dir | Out-Null
-          Copy-Item ".\build\Release\OpenSteamTool.dll" "$dir/OpenSteamTool.dll" -Force
-          [IO.File]::WriteAllText((Resolve-Path $dir).Path + "/OpenSteamTool.dll.sha256", $hash)
+          Copy-Item ".\build\Release\AmethystTool.dll" "$dir/AmethystTool.dll" -Force
+          [IO.File]::WriteAllText((Resolve-Path $dir).Path + "/AmethystTool.dll.sha256", $hash)
           $lines = @(
             "version = `"$ver`""
-            "path    = `"opensteamtool/$ver/OpenSteamTool.dll`""
+            "path    = `"opensteamtool/$ver/AmethystTool.dll`""
             "sha256  = `"$hash`""
           )
           Set-Content -Path "pub/opensteamtool/latest.toml" -Value $lines -Encoding ascii
@@ -78,12 +78,12 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: OpenSteamTool-Release
+          name: AmethystTool-Release
           path: build/Release/
 
       - uses: actions/upload-artifact@v4
         with:
-          name: OpenSteamTool-Debug
+          name: AmethystTool-Debug
           path: build/Debug/
 
       - name: Generate changelog
@@ -103,10 +103,10 @@ jobs:
           git push origin ${{ github.event.inputs.version }}
 
       - name: Package Release
-        run: 7z a OpenSteamTool-${{ github.event.inputs.version }}-Release.zip ".\build\Release\*" -mx5
+        run: 7z a AmethystTool-${{ github.event.inputs.version }}-Release.zip ".\build\Release\*" -mx5
 
       - name: Package Debug
-        run: 7z a OpenSteamTool-${{ github.event.inputs.version }}-Debug.zip ".\build\Debug\*" -mx5
+        run: 7z a AmethystTool-${{ github.event.inputs.version }}-Debug.zip ".\build\Debug\*" -mx5
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
@@ -119,11 +119,11 @@ jobs:
 
             ## Installation
 
-            Download `OpenSteamTool-${{ github.event.inputs.version }}-Release.zip` (or the `-Debug` variant if you need logging to `<steam>/opensteamtool directory`).
+            Download `AmethystTool-${{ github.event.inputs.version }}-Release.zip` (or the `-Debug` variant if you need logging to `<steam>/amethysttool directory`).
 
-            Extract and copy `dwmapi.dll`, `xinput1_4.dll` and `OpenSteamTool.dll` to your Steam root directory (e.g. `C:\Program Files (x86)\Steam`).
+            Extract and copy `dwmapi.dll`, `xinput1_4.dll` and `AmethystTool.dll` to your Steam root directory (e.g. `C:\Program Files (x86)\Steam`).
 
             Create a Lua config directory (for example `C:\Program Files (x86)\Steam\config\stplug-in`) and place your Lua scripts there.
           files: |
-            OpenSteamTool-${{ github.event.inputs.version }}-Release.zip
-            OpenSteamTool-${{ github.event.inputs.version }}-Debug.zip
+            AmethystTool-${{ github.event.inputs.version }}-Release.zip
+            AmethystTool-${{ github.event.inputs.version }}-Debug.zip

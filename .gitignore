@@ -21,3 +21,6 @@ build/
 
 # DLLs (keep only source files)
 !.deps/**/*.dll
+
+# Code-review tool artifact (local only, not part of the project)
+.code-review-graph/

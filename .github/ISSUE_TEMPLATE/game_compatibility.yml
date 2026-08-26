@@ -73,7 +73,7 @@ body:
       description: |
         Most relevant logs for this template: `manifest.log`, `decryptionkey.log`, `ipc.log`, `pics.log`, `achievement.log` (Debug build only).
 
-        **Pack the whole `<Steam>/opensteamtool/` folder into an archive (`.zip`, `.tar.gz`, `.tgz`, `.gz`) and drag-and-drop it into this box.**
+        **Pack the whole `<Steam>/amethysttool/` folder into an archive (`.zip`, `.tar.gz`, `.tgz`, `.gz`) and drag-and-drop it into this box.**
 
   - type: textarea
     id: additional

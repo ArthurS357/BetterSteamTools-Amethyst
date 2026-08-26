@@ -80,7 +80,7 @@ namespace Log {
         try {
             auto dir = OSTPlatform::DynamicLibrary::GetModuleDirectory(selfModule);
             if (dir.empty()) dir = ".";
-            auto logDir = (dir / "opensteamtool").string();
+            auto logDir = (dir / "amethysttool").string();
             std::filesystem::create_directories(logDir);
             Main = MakeLogger(logDir, "main");
             Main->set_level(spdlog::level::trace);  // early boot: log everything

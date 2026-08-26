@@ -20,8 +20,10 @@ namespace {
         // Privacy/independence defaults (Amethyst fork): both OFF by default.
         //  - statsEnableApi: when true, queries https://stats.opensteamtool.com/{appid}
         //    (upstream telemetry that reveals which apps are launched). Opt-in only.
-        //  - updateEnabled: legacy self-update flag; the self-update code path is
-        //    compiled out entirely (see dllmain.cpp), so this only affects logging.
+        //  - updateEnabled: legacy self-update flag; still parsed from the TOML for
+        //    backward compatibility but has no effect — the self-update code path is
+        //    compiled out entirely unless built with OST_ENABLE_AUTOUPDATE defined
+        //    (see dllmain.cpp).
         bool statsEnableApi = false;
         bool updateEnabled = false;
         std::vector<InjectDll> injectDlls;
@@ -45,7 +47,7 @@ namespace {
     Snapshot MakeDefaultSnapshot(const std::string& configPath) {
         Snapshot snapshot;
         std::filesystem::path p(configPath);
-        snapshot.logDir = (p.parent_path() / "opensteamtool").string();
+        snapshot.logDir = (p.parent_path() / "amethysttool").string();
         return snapshot;
     }
 

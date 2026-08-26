@@ -1,7 +1,7 @@
 <div align="center">
-  <img src="docs/bst.png" width="100%" alt="Logo de BetterSteamTools">
+  <img src="docs/bst.png" width="100%" alt="Logo de AmethystTool">
 
-  <h1>BetterSteamTools - a fork of OpenSteamTools!</h1>
+  <h1>AmethystTool - a fork of OpenSteamTools!</h1>
 
   <p>
     <strong>Herramienta de código abierto para desbloquear Steam</strong>
@@ -43,18 +43,18 @@
 - Añadir, modificar, eliminar o sobrescribir archivos `.lua` en cualquier directorio supervisado activa automáticamente una recarga. No se necesita reiniciar ni alternar entre modo desconectado/conectado.
 
 ### Inyección
-- Añade inyección opcional de DLL en procesos de juego mediante una o varias entradas `[[inject]]` en `opensteamtool.toml`.
+- Añade inyección opcional de DLL en procesos de juego mediante una o varias entradas `[[inject]]` en `amethysttool.toml`.
 - Cada entrada define un `path` (un nombre simple se resuelve junto a `steam.exe`; una ruta absoluta se usa tal cual) y condiciones opcionales — `when_cmdline` (subcadena requerida en el comando de lanzamiento), `when_appids` (restringir a appids concretos) y `all_games` (`true` = todos los juegos, `false` = solo juegos añadidos por Lua). Un DLL se inyecta cuando coinciden *todas* las condiciones que define; varias entradas pueden apuntar al mismo juego y cada DLL se inyecta como máximo una vez.
 
 ### Préstamo familiar y juego en remoto
-- Omite las restricciones de Steam Family Sharing para los juegos que se hayan añadido a la biblioteca con `addappid` en Lua. Todas las cuentas de la familia de Steam que participen en el préstamo familiar deben usar OpenSteamTool para que esto funcione.
+- Omite las restricciones de Steam Family Sharing para los juegos que se hayan añadido a la biblioteca con `addappid` en Lua. Todas las cuentas de la familia de Steam que participen en el préstamo familiar deben usar AmethystTool para que esto funcione.
 
 ### Compatible con juegos protegidos por Denuvo y SteamStub
-- Los juegos protegidos únicamente por SteamStub no requieren la configuración de `AppTicket`. OpenSteamTool puede reutilizar el ticket local de ConfigStore de Steam y falsificar el AppId solicitado a través de una vulnerabilidad de desbordamiento por cuatro (off-by-four ticket parsing vulnerability) en SteamDRMP, sin necesidad de inyectarse en el proceso del juego.
+- Los juegos protegidos únicamente por SteamStub no requieren la configuración de `AppTicket`. AmethystTool puede reutilizar el ticket local de ConfigStore de Steam y falsificar el AppId solicitado a través de una vulnerabilidad de desbordamiento por cuatro (off-by-four ticket parsing vulnerability) en SteamDRMP, sin necesidad de inyectarse en el proceso del juego.
 - Los juegos protegidos por Denuvo siguen requiriendo datos explícitos del ticket. En `HKEY_CURRENT_USER\Software\Valve\Steam\Apps\{AppId}`, tanto `AppTicket` como `ETicket` son valores `REG_BINARY`.
 - Utiliza `setAppTicket(appid, "hex")` y `setETicket(appid, "hex")` en la configuración de Lua para escribir estos valores en el registro de forma automática.
 - La verificación de Denuvo tiene una ventana de validez de 30 minutos. Cuando esta ventana expira, la autorización puede fallar con el código de error de Denuvo `88500005`; actualiza los datos del ticket antes de volver a intentarlo.
-- Prioridad de AppTicket: los tickets explícitos tienen la prioridad más alta, incluyendo los tickets configurados por `setAppTicket` y los valores de `AppTicket` ya existentes en el registro. Si no hay ningún AppTicket explícito disponible, OpenSteamTool recurre a la ruta del ticket falsificado de ConfigStore local.
+- Prioridad de AppTicket: los tickets explícitos tienen la prioridad más alta, incluyendo los tickets configurados por `setAppTicket` y los valores de `AppTicket` ya existentes en el registro. Si no hay ningún AppTicket explícito disponible, AmethystTool recurre a la ruta del ticket falsificado de ConfigStore local.
 - Prioridad de SteamID: primero lee `SteamID` como `REG_SZ`(únicamente numérico); si no se encuentra, lo analiza a partir del `AppTicket` explícito.
 
 ### Extracción de tickets con `extract_tickets`
@@ -87,7 +87,7 @@ La herramienta `extract_tickets` vuelca las cadenas hexadecimales de `AppTicket`
 ### Estadísticas y logros
 - Activa las estadísticas y los logros para los juegos que no poseas.
 - Utiliza `setStat(appid, "steamid")` para configurar de qué SteamID se deben extraer los datos de los logros.
-- Si no hay ningún `setStat` configurado para una aplicación, OpenSteamTool consulta `https://stats.opensteamtool.com/{appid}` cuando `[stats] enable_api = true` (valor predeterminado).
+- Si no hay ningún `setStat` configurado para una aplicación, AmethystTool consulta `https://stats.opensteamtool.com/{appid}` cuando `[stats] enable_api = true` (valor predeterminado).
 - Prioridad: `setStat` > API de estadísticas cuando está habilitada y devuelve un valor válido > SteamID predefinido `76561198028121353`.
 
 ### Online Fix(Reparacion para habilitar el Online)
@@ -98,7 +98,7 @@ La herramienta `extract_tickets` vuelca las cadenas hexadecimales de `AppTicket`
 
 ## Uso
 1. Ejecuta `build.bat` desde la raíz del proyecto para compilarlo.
-2. Copia los archivos generados `dwmapi.dll`, `xinput1_4.dll` y `OpenSteamTool.dll` al directorio raíz de Steam.
+2. Copia los archivos generados `dwmapi.dll`, `xinput1_4.dll` y `AmethystTool.dll` al directorio raíz de Steam.
 3. Crea un directorio para Lua (por ejemplo, C:\steam\config\lua) y coloca allí tus scripts de Lua. La DLL los cargará y ejecutará automáticamente.
 4. Ejemplo de Lua:
 ```lua
@@ -124,7 +124,7 @@ setStat(1361510, "76561197960287930") -- utiliza los datos de logros del SteamID
 Los nombres de todas las funciones **no distinguen entre mayúsculas y minúsculas**. `setAppTicket`, `setappticket`, `SetAppticket`, `SETAPPTICKET`, etc., son todas equivalentes. Lo mismo se aplica a cada función registrada (`addAppId`, `AddToken`, `SETManifestid`, etc.).
 
 ### Configuración (opcional)
-Cambia el nombre de `opensteamtool.example.toml` a `opensteamtool.toml` y colócalo en el directorio raíz de Steam (junto a `steam.exe`).
+Cambia el nombre de `amethysttool.example.toml` a `amethysttool.toml` y colócalo en el directorio raíz de Steam (junto a `steam.exe`).
 Si no se encuentra ningún archivo de configuración, se utilizarán los valores predeterminados integrados; no se creará ninguno de forma automática.
 El archivo se supervisa mientras Steam está en ejecución; los cambios válidos se recargan en caliente sin reiniciar Steam.
 
@@ -157,7 +157,7 @@ paths = []
 # Inyección opcional de DLL en procesos de juego. Cada entrada [[inject]] se carga
 # cuando coinciden todas las condiciones que define.
 # [[inject]]
-# path = "OpenSteamToolHook.dll"      # un nombre simple se resuelve junto a steam.exe; una ruta absoluta se usa tal cual
+# path = "AmethystToolHook.dll"       # un nombre simple se resuelve junto a steam.exe; una ruta absoluta se usa tal cual
 # when_cmdline = "-my_special_hook"   # opcional: requiere esta subcadena en el comando de lanzamiento (por defecto: cualquiera)
 # when_appids = [1361510]             # opcional: restringir a estos appids (por defecto: cualquiera)
 # all_games = false                   # opcional: true inyecta en todos los juegos, false solo en juegos añadidos por Lua (por defecto: false)
@@ -189,17 +189,17 @@ El entorno de ejecución (runtime) en C++ proporciona dos funciones auxiliares d
 
 ### Compatibilidad con versiones de Steam
 
-OpenSteamTool ya no incluye firmas de patrones de bytes (byte-pattern signatures) dentro de la DLL. En su lugar, en cada inicio calcula el hash SHA-256 de `steamclient64.dll` y `steamui.dll` en el disco, y busca un archivo de patrones coincidente desde el rastreador ascendente en ['OpenSteam001/steam-monitor'](https://github.com/OpenSteam001/steam-monitor) (extension `pattern`).
+AmethystTool ya no incluye firmas de patrones de bytes (byte-pattern signatures) dentro de la DLL. En su lugar, en cada inicio calcula el hash SHA-256 de `steamclient64.dll` y `steamui.dll` en el disco, y busca un archivo de patrones coincidente desde el rastreador ascendente en ['OpenSteam001/steam-monitor'](https://github.com/OpenSteam001/steam-monitor) (extension `pattern`).
 
 Orden de búsqueda (en cada inicio):
 
 1.**GitHub raw** — `https://raw.githubusercontent.com/OpenSteam001/steam-monitor/pattern/....` Fuente canónica.
 2.**jsDelivr CDN** — alternativa automática si GitHub raw no está disponible (conexión rechazada / tiempo de espera / error 5xx). No requiere configuración. Útil en regiones donde `raw.githubusercontent.com` está bloqueado pero jsDelivr es accesible (por ejemplo, China continental).
-3.**Caché local** — `<Steam>\opensteamtool\pattern\<subdir>\<sha256>.toml`. Se utiliza **únicamente** cuando el servidor remoto no está disponible. La caché se sobrescribe tras cada consulta remota exitosa.
+3.**Caché local** — `<Steam>\amethysttool\pattern\<subdir>\<sha256>.toml`. Se utiliza **únicamente** cuando el servidor remoto no está disponible. La caché se sobrescribe tras cada consulta remota exitosa.
 
 Se consulta al servidor remoto en cada inicio para que los usuarios obtengan automáticamente las nuevas publicaciones del proyecto principal (por ejemplo, si el bot añade una nueva firma o corrige una existente) sin tener que limpiar ninguna caché.
 
-Si un paso devuelve un error **HTTP 404**, el bucle de espejos (mirrors) se detiene inmediatamente —todos los espejos sirven el mismo contenido, por lo que un 404 significa que el bot ascendente aún no ha publicado un archivo TOML para esa compilación específica de Steam—. En ese caso, el código recurre a la caché local si existe; de lo contrario, aparecerá una ventana emergente por única vez mostrando el nombre de la DLL no emparejada, su SHA-256, la ruta de caché esperada y la URL de origen. Solo se desactivarán los ganchos (hooks) vinculados a esa DLL; el resto de OpenSteamTool seguirá funcionando.
+Si un paso devuelve un error **HTTP 404**, el bucle de espejos (mirrors) se detiene inmediatamente —todos los espejos sirven el mismo contenido, por lo que un 404 significa que el bot ascendente aún no ha publicado un archivo TOML para esa compilación específica de Steam—. En ese caso, el código recurre a la caché local si existe; de lo contrario, aparecerá una ventana emergente por única vez mostrando el nombre de la DLL no emparejada, su SHA-256, la ruta de caché esperada y la URL de origen. Solo se desactivarán los ganchos (hooks) vinculados a esa DLL; el resto de AmethystTool seguirá funcionando.
 
 También puedes colocar manualmente un archivo TOML de patrones en el directorio de la caché si conoces la estructura para una compilación determinada; el nombre del archivo debe ser `<sha256>.toml`. La caché de reserva lo detectará la próxima vez que el servidor remoto sea inaccesible.
 
@@ -219,7 +219,7 @@ url_template = "https://tu.servidor/{channel}/{component}/{sha256}.toml"
 
 ### Registro de depuración
 
-Las compilaciones de depuración (Debug) escriben archivos de registro independientes por módulo dentro de `<Steam>/opensteamtool/`:
+Las compilaciones de depuración (Debug) escriben archivos de registro independientes por módulo dentro de `<Steam>/amethysttool/`:
 
 | Archivo | Fuente | Contenido |
 |---------|--------|-----------|
@@ -239,7 +239,7 @@ Las compilaciones de depuración (Debug) escriben archivos de registro independi
 | `pipe.log`          | `LOG_PIPE_*` | Handshakes de pipe, inspección de procesos, autorización de Denuvo, inyección de bibliotecas |
 | `platform.log`      | `LOG_PLATFORM_*` | Diagnósticos de utilidades de plataforma, incluidas operaciones sobre procesos remotos |
 
-El nivel de registro se controla mediante `[log] level` en `opensteamtool.toml`.
+El nivel de registro se controla mediante `[log] level` en `amethysttool.toml`.
 
 ## Compilación
 
@@ -257,9 +257,9 @@ build.bat
 ```
 
 ### Archivos de salida
-- Debug: `build/Debug/OpenSteamTool.dll`, `build/Debug/dwmapi.dll`, `build/Debug/xinput1_4.dll`
+- Debug: `build/Debug/AmethystTool.dll`, `build/Debug/dwmapi.dll`, `build/Debug/xinput1_4.dll`
 
-- Release: `build/Release/OpenSteamTool.dll`, `build/Release/dwmapi.dll`, `build/Release/xinput1_4.dll`
+- Release: `build/Release/AmethystTool.dll`, `build/Release/dwmapi.dll`, `build/Release/xinput1_4.dll`
 
 ## Descargo de responsabilidad
 Este proyecto se proporciona únicamente con fines de investigación y educativos. Eres responsable de cumplir con las leyes locales, los términos de servicio de la plataforma y las licencias de software correspondientes.
