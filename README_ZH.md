@@ -34,6 +34,17 @@
   </p>
 </div>
 
+## 关于本分支 Amethyst
+
+AmethystTool 是 OpenSteamTools 的一个注重隐私的分支。与上游的行为差异：
+
+- **自动更新已禁用并从编译中移除。** 上游会在启动时下载替换用的 DLL 并原地覆盖自身，且仅根据同一渠道提供的哈希校验完整性——因此谁控制了镜像，谁就控制了在你机器上运行的代码（一个远程代码执行风险），并使该分支绑死在上游基础设施上。Amethyst 构建彻底移除了这条路径；`[update] enabled` 键仍会为兼容旧配置而被解析，但不产生任何效果。（在编译时定义 `OST_ENABLE_AUTOUPDATE` 可恢复旧行为。）
+- **遥测默认关闭。** 统计 API（`https://stats.opensteamtool.com/{appid}`，会暴露你启动了哪些应用）为可选项：除非你主动开启，否则 `[stats] enable_api = false`。
+- **具备韧性的本地缓存。** [模式查找](#steam-版本兼容性)仍会在每次启动时查询上游追踪器，但位于 `<Steam>\amethysttool\` 的本地缓存可在远端不可达时让工具继续工作。
+- **重命名的接口。** DLL 为 `AmethystTool.dll`，配置文件为 `amethysttool.toml`。重命名之前的 `opensteamtool.toml` 中的设置会在首次启动时自动迁移——参见[配置迁移](#配置迁移)。
+
+> **在用于主账户之前，请先在隔离环境中测试。** 注入 Steam 带来的账户风险完全由你自己承担——参见 [TESTING.md](TESTING.md)。
+
 ## 功能特性
 
 ### 核心解锁
@@ -92,7 +103,7 @@
 ### 统计和成就
 - 为未拥有的游戏启用统计和成就
 - 使用 `setStat(appid, "steamid")` 配置拉取哪个 SteamID 的成就数据
-- 如果某个应用未配置 `setStat`，当 `[stats] enable_api = true`（默认）时，AmethystTool 查询 `https://stats.opensteamtool.com/{appid}`
+- 如果某个应用未配置 `setStat`，当 `[stats] enable_api = true` 时，AmethystTool 查询 `https://stats.opensteamtool.com/{appid}`。**本分支默认关闭**（需主动开启——参见[关于本分支](#关于本分支-amethyst)）
 - 优先级：`setStat` > stats API（启用且有效时）> 硬编码预设 SteamID `76561198028121353`
 
 ### 在线修复
@@ -153,7 +164,8 @@ timeout_recv_ms    = 10000
 [stats]
 # 当没有 Lua setStat 覆盖时查询 https://stats.opensteamtool.com/{appid}
 # 优先级：setStat > stats API > 硬编码预设 SteamID
-enable_api = true
+# 本分支默认关闭（开启后会暴露你启动了哪些应用）。
+enable_api = false
 
 # 额外的 Lua 配置目录（可选）
 # 文件在默认 <Steam>/config/stplug-in 文件夹之后加载
@@ -172,6 +184,16 @@ paths = []
 [remote]
 # url_template = "https://your.server/{channel}/{component}/{sha256}.toml"
 ```
+
+### 配置迁移
+
+如果你从上游 OpenSteamTools（读取 `opensteamtool.toml`）升级而来，你的设置会被自动沿用。首次启动时，如果 `steam.exe` 旁**没有** `amethysttool.toml`，但存在 `opensteamtool.toml`，AmethystTool 会将其复制为 `amethysttool.toml`，并记录 `Migrated config from opensteamtool.toml to amethysttool.toml`。
+
+- 复制至多执行一次，且**绝不覆盖**已存在的 `amethysttool.toml`——你已用新名称创建的配置始终优先。
+- 旧的 `opensteamtool.toml` 会**原样保留**（复制而非移动），因此回退到旧版构建仍能找到其配置。
+- 仅文件名改变；TOML 的键和值保持不变。
+
+如果两个文件都不存在，则使用内置默认值（不会创建任何文件）。
 
 ### 通过 Lua 获取 Manifest
 
@@ -247,6 +269,18 @@ url_template = "https://your.server/{channel}/{component}/{sha256}.toml"
 | `platform.log` | `LOG_PLATFORM_*` | 平台助手诊断，包括远程进程操作 |
 
 日志级别由 `amethysttool.toml` 中的 `[log] level` 控制
+
+## 杀毒软件与 SmartScreen
+
+AmethystTool 的工作方式是加载进 Steam 并在进程内安装 hook（通过 Microsoft Detours）。这正是杀毒软件启发式所查找的技术，因此**未签名的构建很可能被标记或隔离**——这是该技术固有的误报，而非恶意软件的证据。已观察到 Kaspersky、Defender 等会隔离刚构建出的 DLL。
+
+如果你的杀毒软件删除或拦截了这些 DLL：
+
+- 为包含 `AmethystTool.dll`、`dwmapi.dll` 和 `xinput1_4.dll` 的文件夹（Steam 根目录）添加排除项，使实时扫描不再处理它们。
+- 如果某个构建已被隔离，先从隔离区恢复再添加排除项，或在排除输出文件夹后重新构建。
+- Windows SmartScreen 可能在首次运行时发出警告，因为这些二进制文件未签名——对于自行构建、未签名的工具，这是预期行为。
+
+只排除你自己构建或信任其内容的文件夹。如果你不愿削弱防护，请改在隔离环境中运行本工具——参见 [TESTING.md](TESTING.md)。你可以在 [Steam 版本兼容性](#steam-版本兼容性)和[关于本分支](#关于本分支-amethyst)章节中审查本工具通过网络发送的确切内容。
 
 ## 构建
 

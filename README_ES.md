@@ -29,6 +29,17 @@
   </p>
 </div>
 
+## Acerca de este fork (Amethyst)
+
+AmethystTool es un fork de OpenSteamTools reforzado en privacidad. Diferencias de comportamiento respecto al upstream:
+
+- **La autoactualización está desactivada y excluida de la compilación.** El upstream descargaba una DLL de reemplazo al inicio y se sobrescribía a sí mismo, verificando la integridad solo contra un hash servido por el mismo canal — de modo que quien controlara un espejo controlaba el código que se ejecutaba en tu máquina (un vector de ejecución remota de código), y el fork quedaba atado a la infraestructura del upstream. La compilación de Amethyst elimina por completo esta ruta; la clave `[update] enabled` se sigue leyendo por compatibilidad de configuración pero no tiene efecto. (Recompila definiendo `OST_ENABLE_AUTOUPDATE` para restaurar el comportamiento anterior.)
+- **La telemetría está desactivada por defecto.** La API de estadísticas (`https://stats.opensteamtool.com/{appid}`, que revela qué aplicaciones lanzas) es opcional: `[stats] enable_api = false` salvo que la actives.
+- **Caché local resiliente.** La [búsqueda de patrones](#compatibilidad-con-versiones-de-steam) sigue consultando el rastreador del upstream en cada inicio, pero una caché local bajo `<Steam>\amethysttool\` mantiene la herramienta funcionando cuando el servidor remoto no está accesible.
+- **Superficie renombrada.** La DLL es `AmethystTool.dll` y el archivo de configuración es `amethysttool.toml`. La configuración de un `opensteamtool.toml` previo al renombrado se migra automáticamente en el primer inicio — consulta [Migración de configuración](#migración-de-configuración).
+
+> **Prueba en un entorno aislado antes de usarlo en tu cuenta principal.** Inyectar en Steam conlleva un riesgo para la cuenta que asumes por completo — consulta [TESTING.md](TESTING.md).
+
 ## Características
 
 ### Desbloqueos principales
@@ -87,7 +98,7 @@ La herramienta `extract_tickets` vuelca las cadenas hexadecimales de `AppTicket`
 ### Estadísticas y logros
 - Activa las estadísticas y los logros para los juegos que no poseas.
 - Utiliza `setStat(appid, "steamid")` para configurar de qué SteamID se deben extraer los datos de los logros.
-- Si no hay ningún `setStat` configurado para una aplicación, AmethystTool consulta `https://stats.opensteamtool.com/{appid}` cuando `[stats] enable_api = true` (valor predeterminado).
+- Si no hay ningún `setStat` configurado para una aplicación, AmethystTool consulta `https://stats.opensteamtool.com/{appid}` cuando `[stats] enable_api = true`. **Desactivado por defecto en este fork** (opcional — consulta [Acerca de este fork](#acerca-de-este-fork-amethyst)).
 - Prioridad: `setStat` > API de estadísticas cuando está habilitada y devuelve un valor válido > SteamID predefinido `76561198028121353`.
 
 ### Online Fix(Reparacion para habilitar el Online)
@@ -146,7 +157,8 @@ timeout_recv_ms    = 10000
 [stats]
 # Consulta https://stats.opensteamtool.com/{appid} cuando no existe setStat en Lua.
 # Prioridad: setStat > API de estadísticas > SteamID predefinido.
-enable_api = true
+# Desactivado por defecto en este fork (opcional: activarlo revela qué apps lanzas).
+enable_api = false
 
 # Directorios adicionales de configuración de Lua (opcional).
 # Los archivos se cargan después de la carpeta predeterminada <Steam>/config/stplug-in.
@@ -166,6 +178,16 @@ paths = []
 [remote]
 # url_template = "https://tu.servidor/{channel}/{component}/{sha256}.toml"
 ```
+### Migración de configuración
+
+Si actualizas desde el OpenSteamTools upstream (que leía `opensteamtool.toml`), tu configuración se conserva automáticamente. En el primer inicio, si **no** existe `amethysttool.toml` junto a `steam.exe` pero sí existe allí un `opensteamtool.toml`, AmethystTool lo copia a `amethysttool.toml` y registra `Migrated config from opensteamtool.toml to amethysttool.toml`.
+
+- La copia se realiza como máximo una vez y **nunca sobrescribe** un `amethysttool.toml` existente — una configuración que ya creaste con el nombre nuevo siempre prevalece.
+- El antiguo `opensteamtool.toml` se **conserva** (se copia, no se mueve), de modo que volver a una compilación anterior sigue encontrando su configuración.
+- Solo cambia el nombre del archivo; las claves y valores del TOML permanecen intactos.
+
+Si no existe ninguno de los dos archivos, se usan los valores predeterminados integrados (no se crea ningún archivo).
+
 ### Manifiest a través de Lua
 
 Se admiten dos funciones de código de manifiesto:
@@ -240,6 +262,18 @@ Las compilaciones de depuración (Debug) escriben archivos de registro independi
 | `platform.log`      | `LOG_PLATFORM_*` | Diagnósticos de utilidades de plataforma, incluidas operaciones sobre procesos remotos |
 
 El nivel de registro se controla mediante `[log] level` en `amethysttool.toml`.
+
+## Antivirus y SmartScreen
+
+AmethystTool funciona cargándose dentro de Steam e instalando hooks en el proceso (mediante Microsoft Detours). Estas son exactamente las técnicas que buscan las heurísticas de los antivirus, así que **es muy probable que una compilación sin firmar sea marcada o puesta en cuarentena** — se trata de un falso positivo inherente a la técnica, no de una prueba de malware. Se ha observado que Kaspersky, Defender y otros ponen en cuarentena las DLL recién compiladas.
+
+Si tu antivirus elimina o bloquea las DLL:
+
+- Añade una exclusión para la carpeta que contiene `AmethystTool.dll`, `dwmapi.dll` y `xinput1_4.dll` (el directorio raíz de Steam), para que el análisis en tiempo real las deje en su sitio.
+- Si una compilación ya fue puesta en cuarentena, restáurala y luego añade la exclusión, o recompila tras excluir la carpeta de salida.
+- Windows SmartScreen puede advertir en la primera ejecución porque los binarios no están firmados — es lo esperado en una herramienta autocompilada y sin firmar.
+
+Excluye solo carpetas cuyo contenido hayas compilado o en el que confíes. Si prefieres no debilitar tu protección, ejecuta la herramienta en un entorno aislado — consulta [TESTING.md](TESTING.md). Puedes auditar exactamente qué envía la herramienta por la red en las secciones [Compatibilidad con versiones de Steam](#compatibilidad-con-versiones-de-steam) y [Acerca de este fork](#acerca-de-este-fork-amethyst).
 
 ## Compilación
 

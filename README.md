@@ -34,6 +34,17 @@
   </p>
 </div>
 
+## About this fork (Amethyst)
+
+AmethystTool is a privacy-hardened fork of OpenSteamTools. Behavioural differences from upstream:
+
+- **Self-update is disabled and compiled out.** Upstream downloaded a replacement DLL on startup and overwrote itself in place, verifying integrity only against a hash served by the same channel — so whoever controlled a mirror controlled the code that ran on your machine (a remote-code-execution vector), and the fork stayed tethered to upstream infrastructure. The Amethyst build removes this path entirely; the `[update] enabled` key is still parsed for config compatibility but has no effect. (Rebuild with `OST_ENABLE_AUTOUPDATE` defined to restore the old behaviour.)
+- **Telemetry is off by default.** The stats API (`https://stats.opensteamtool.com/{appid}`, which reveals which apps you launch) is opt-in: `[stats] enable_api = false` unless you turn it on.
+- **Resilient local cache.** [Pattern lookup](#steam-version-compatibility) still consults the upstream tracker on each launch, but a local cache under `<Steam>\amethysttool\` keeps the tool working when the remote is unreachable.
+- **Renamed surface.** The DLL is `AmethystTool.dll` and the config file is `amethysttool.toml`. Settings from a pre-rename `opensteamtool.toml` are migrated automatically on first launch — see [Config migration](#config-migration).
+
+> **Test in an isolated environment before using on your main account.** Injecting into Steam carries account risk that is entirely yours — see [TESTING.md](TESTING.md).
+
 ## Feature
 
 ### Core Unlocks
@@ -95,7 +106,7 @@ The `extract_tickets` tool dumps the `AppTicket` and `ETicket` hex strings you n
 ### Stats and Achievements
 - Enable stats and achievements for unowned games.
 - Uses `setStat(appid, "steamid")` to configure which SteamID's achievement data to pull.
-- If no `setStat` is configured for an app, AmethystTool queries `https://stats.opensteamtool.com/{appid}` when `[stats] enable_api = true` (default).
+- If no `setStat` is configured for an app, AmethystTool queries `https://stats.opensteamtool.com/{appid}` when `[stats] enable_api = true`. **Off by default in this fork** (opt-in — see [About this fork](#about-this-fork-amethyst)).
 - Priority: `setStat` > stats API when enabled and valid > hardcoded preset SteamID `76561198028121353`.
 
 ### Online Fix
@@ -158,7 +169,8 @@ timeout_recv_ms    = 10000
 [stats]
 # Query https://stats.opensteamtool.com/{appid} when no Lua setStat override exists.
 # Priority: setStat > stats API > hardcoded preset SteamID.
-enable_api = true
+# Off by default in this fork (opt-in: enabling it reveals which apps you launch).
+enable_api = false
 
 # Additional Lua config directories (optional).
 # Files are loaded after the default <Steam>/config/stplug-in folder.
@@ -178,6 +190,16 @@ paths = []
 [remote]
 # url_template = "https://your.server/{channel}/{component}/{sha256}.toml"
 ```
+
+### Config migration
+
+If you are updating from the upstream OpenSteamTools (which read `opensteamtool.toml`), your settings are carried over automatically. On first launch, if there is **no** `amethysttool.toml` next to `steam.exe` but an `opensteamtool.toml` exists there, AmethystTool copies it to `amethysttool.toml` and logs `Migrated config from opensteamtool.toml to amethysttool.toml`.
+
+- The copy runs at most once and **never overwrites** an existing `amethysttool.toml` — a config you already created under the new name always wins.
+- The old `opensteamtool.toml` is **left in place** (copied, not moved), so rolling back to an older build still finds its config.
+- Only the file name changes; the TOML keys and values are untouched.
+
+If neither file exists, built-in defaults are used (no file is created).
 
 ### Manifest via Lua
 
@@ -253,6 +275,18 @@ Debug builds write per-module log files under `<Steam>/amethysttool/`:
 | `platform.log`      | `LOG_PLATFORM_*` | Platform helper diagnostics, including remote-process operations |
 
 The log level is controlled by `[log] level` in `amethysttool.toml`.
+
+## Antivirus and SmartScreen
+
+AmethystTool works by loading into Steam and installing in-process hooks (via Microsoft Detours). These are exactly the techniques antivirus heuristics look for, so **an unsigned build will very likely be flagged or quarantined** — this is a false positive inherent to the technique, not evidence of malware. Kaspersky, Defender, and others have been observed quarantining the freshly built DLLs.
+
+If your antivirus removes or blocks the DLLs:
+
+- Add an exclusion for the folder that holds `AmethystTool.dll`, `dwmapi.dll`, and `xinput1_4.dll` (the Steam root directory), so on-access scanning leaves them in place.
+- If a build was already quarantined, restore it from quarantine and then add the exclusion, or rebuild after excluding the output folder.
+- Windows SmartScreen may warn on first run because the binaries are unsigned — this is expected for a self-built, unsigned tool.
+
+Only exclude folders whose contents you built or trust. If you would rather not weaken your protection, run the tool in an isolated environment instead — see [TESTING.md](TESTING.md). You can audit exactly what the tool sends over the network in the [Steam version compatibility](#steam-version-compatibility) and [About this fork](#about-this-fork-amethyst) sections.
 
 ## Build
 
