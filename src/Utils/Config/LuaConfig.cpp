@@ -335,7 +335,12 @@ namespace LuaConfig{
         return 0;
     }
 
-    static int lua_pinApp(lua_State* L) {
+    // Disconnected feature, kept on purpose: the "pinapp" Lua binding is
+    // commented out below (see register table) so this is currently unreferenced,
+    // but it remains part of the coherent pinApp() public API (LuaConfig.h) and is
+    // documented in the READMEs. [[maybe_unused]] marks the intentional keep and
+    // silences C4505 under /W4.
+    [[maybe_unused]] static int lua_pinApp(lua_State* L) {
         // pinApp(integer)
         int argc = lua_gettop(L);
         // Validate argument count and required argument types.
@@ -487,7 +492,7 @@ namespace LuaConfig{
         return 0;
     }
 
-    // ── init / cleanup ───────────────────────────────────────────
+    // ── init ─────────────────────────────────────────────────────
     static bool Initialize() {
         if (g_lua_state)
             return true;
@@ -525,14 +530,6 @@ namespace LuaConfig{
         register_func(g_lua_state, "seteticket", lua_setEticket);
         register_func(g_lua_state, "setstat", lua_setStat);
         return true;
-    }
-
-    static void Cleanup() {
-        if (g_lua_state) {
-            lua_close(g_lua_state);
-            g_lua_state = nullptr;
-        }
-        g_hasManifestCodeFunc = false;
     }
 
     // ── public query API ─────────────────────────────────────────
