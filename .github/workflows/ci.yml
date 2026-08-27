@@ -38,3 +38,43 @@ jobs:
           name: AmethystTool-${{ matrix.config }}-pr${{ github.event.pull_request.number || github.run_number }}
           path: build/${{ matrix.config }}/
           retention-days: 7
+
+  analysis:
+    name: Static analysis (clang-tidy)
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ilammy/msvc-dev-cmd@v1
+
+      # CXX_CLANG_TIDY only takes effect under Ninja/Makefiles (not the VS
+      # generator), and compile_commands.json needs Ninja too — same generator
+      # as the build job, just with CMAKE_EXPORT_COMPILE_COMMANDS explicitly on
+      # (the plain build job above doesn't need it).
+      - name: Configure
+        run: cmake -S src -B build -G "Ninja Multi-Config" -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+
+      # windows-latest ships LLVM (clang-tidy on PATH). This mirrors what
+      # run-clang-tidy does — one invocation per first-party .cpp — without
+      # depending on the Python wrapper script's availability/path across
+      # runner image versions.
+      #
+      # .clang-tidy at the repo root has WarningsAsErrors empty on purpose (see
+      # its header comment): this is a visibility pass, not a merge gate yet.
+      # continue-on-error keeps a missing/misbehaving clang-tidy install from
+      # blocking PRs while still surfacing findings in the log for review.
+      - name: clang-tidy
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          clang-tidy --version
+          $files = git ls-files 'src/*.cpp' | Where-Object { $_ -notmatch '^src/tests/' -and $_ -notmatch '^src/proto/' }
+          $failed = 0
+          foreach ($f in $files) {
+            Write-Host "::group::$f"
+            clang-tidy -p build --quiet $f
+            if ($LASTEXITCODE -ne 0) { $failed++ }
+            Write-Host "::endgroup::"
+          }
+          Write-Host "clang-tidy: $failed / $($files.Count) files reported diagnostics"

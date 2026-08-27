@@ -103,6 +103,7 @@ add_library(AmethystTool SHARED
 
     # Shared utilities
     Utils/Tickets/AppTicket.cpp
+    Utils/Tickets/TicketParsing.cpp
     Utils/Tickets/LegacyCDKey.cpp
     Utils/Tickets/EticketClient.cpp
     Utils/Config/Config.cpp
@@ -121,6 +122,7 @@ add_library(AmethystTool SHARED
     Utils/SteamMetadata/StatsClient.cpp
     Utils/SteamMetadata/SteamDiagnostics.cpp
     Utils/Tokeer/TokeerBridge.cpp
+    Utils/Tokeer/TokeerParsing.cpp
     Utils/Tokeer/TokeerUri.cpp
     Utils/Update/AppUpdater.cpp
 
@@ -198,6 +200,18 @@ if(MSVC)
         /external:anglebrackets /external:W0)
     if(OST_WARNINGS_AS_ERRORS)
         target_compile_options(AmethystTool PRIVATE /WX)
+    endif()
+
+    # MSVC /analyze (SAL-aware static analysis; catches classes of bug clang-tidy
+    # doesn't cover as well in WinAPI code — incorrect HANDLE use, unannotated
+    # buffer overflow). Off by default: it materially slows compilation, so this
+    # stays an opt-in pass (-DOST_ENABLE_ANALYZE=ON), not a default dev/CI flag.
+    # /analyze:external- keeps findings scoped to OUR headers, matching the /W4
+    # external-angle-bracket split above — third-party (SDK/toml++/spdlog/Lua/
+    # protobuf) headers are not ours to fix.
+    option(OST_ENABLE_ANALYZE "Enable MSVC /analyze on the AmethystTool target" OFF)
+    if(OST_ENABLE_ANALYZE)
+        target_compile_options(AmethystTool PRIVATE /analyze /analyze:external-)
     endif()
 
     # The protobuf-generated translation unit is machine-emitted third-party
