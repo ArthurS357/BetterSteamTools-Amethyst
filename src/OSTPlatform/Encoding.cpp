@@ -4,6 +4,7 @@
 
 #include <windows.h>
 
+#include <filesystem>
 #include <limits>
 
 namespace OSTPlatform::Encoding {
@@ -57,6 +58,18 @@ std::wstring Utf8ToWide(std::string_view value) {
         return {};
     }
     return result;
+}
+
+std::filesystem::path Utf8ToPath(std::string_view utf8) {
+    if (utf8.empty()) return {};
+    return std::filesystem::path(
+        std::u8string_view(reinterpret_cast<const char8_t*>(utf8.data()), utf8.size()));
+}
+
+std::string PathToUtf8(const std::filesystem::path& path) {
+    if (path.empty()) return {};
+    const std::u8string u8 = path.u8string();
+    return std::string(reinterpret_cast<const char*>(u8.data()), u8.size());
 }
 
 } // namespace OSTPlatform::Encoding

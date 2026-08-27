@@ -1,4 +1,5 @@
 #include "RemoteToml.h"
+#include "OSTPlatform/include/Encoding.h"
 #include "OSTPlatform/include/Http.h"
 #include "Utils/Config/Config.h"
 #include "Utils/Logging/Log.h"
@@ -97,17 +98,21 @@ Result Fetch(const Request& request)
     LOG_INFO("RemoteToml({}/{}): sha256 = {} ({} ms)",
              request.channel, request.component, out.sha256, hashMs);
 
-    // 2. Cache path & dir.
-    fs::path steamRoot = fs::path(request.dllPath).parent_path();
+    // 2. Cache path & dir. request.dllPath is UTF-8 (SteamUIPath/SteamclientPath, built
+    // from OSTPlatform::DynamicLibrary::GetCurrentDirectoryPath() in dllmain.cpp), so it
+    // goes through Utf8ToPath rather than the ANSI-codepage path(std::string) constructor.
+    fs::path steamRoot = OSTPlatform::Encoding::Utf8ToPath(request.dllPath).parent_path();
     fs::path cacheDir  = steamRoot / "amethysttool" / request.channel / request.component;
     fs::path cachePath = cacheDir / (out.sha256 + ".toml");
-    const std::string cachePathText = cachePath.string();
+    // Log-only text -- the actual I/O below (fs::exists/ifstream/ofstream) uses the
+    // cachePath/cacheDir fs::path objects directly, so this narrowing never touches disk.
+    const std::string cachePathText = OSTPlatform::Encoding::PathToUtf8(cachePath);
 
     std::error_code mkdirEc;
     fs::create_directories(cacheDir, mkdirEc);
     if (mkdirEc) {
         LOG_WARN("RemoteToml({}/{}): could not create cache dir {} ({})",
-                 request.channel, request.component, cacheDir.string(), mkdirEc.message());
+                 request.channel, request.component, OSTPlatform::Encoding::PathToUtf8(cacheDir), mkdirEc.message());
     }
 
     // 3. Cache-first (Amethyst fork): a pattern/IPC TOML is keyed by the DLL's exact

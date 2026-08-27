@@ -1,6 +1,7 @@
 #include "CloudRedirectHost.h"
 
 #include "OSTPlatform/include/DynamicLibrary.h"
+#include "OSTPlatform/include/Encoding.h"
 #include "Utils/Config/Config.h"
 #include "Utils/Config/LuaConfig.h"
 #include "Utils/Logging/Log.h"
@@ -61,15 +62,19 @@ namespace {
         }
     }
 
+    // steamRoot is UTF-8 (Initialize's steamInstallPath, sourced from
+    // OSTPlatform::DynamicLibrary::GetCurrentDirectoryPath()); configured is UTF-8 too
+    // when non-empty (TOML [cloud].library, TOML is UTF-8 by spec). Both go through
+    // Utf8ToPath rather than the ANSI-codepage path(std::string) constructor.
     std::filesystem::path ResolveLibraryPath(const std::string& steamRoot,
                                              const std::string& configured) {
         if (configured.empty())
-            return std::filesystem::path(steamRoot) / "cloud_redirect.dll";
+            return OSTPlatform::Encoding::Utf8ToPath(steamRoot) / "cloud_redirect.dll";
 
-        std::filesystem::path lib(configured);
+        std::filesystem::path lib = OSTPlatform::Encoding::Utf8ToPath(configured);
         if (lib.is_absolute())
             return lib;
-        return std::filesystem::path(steamRoot) / lib;
+        return OSTPlatform::Encoding::Utf8ToPath(steamRoot) / lib;
     }
 
     template <typename T>
@@ -101,14 +106,17 @@ void Initialize(const char* steamInstallPath) {
 
     const std::filesystem::path libPath = ResolveLibraryPath(steamInstallPath, cloud.library);
     if (!std::filesystem::exists(libPath)) {
-        LOG_WARN("CloudRedirect: cloud_redirect.dll not found at {}", libPath.string());
+        LOG_WARN("CloudRedirect: cloud_redirect.dll not found at {}", OSTPlatform::Encoding::PathToUtf8(libPath));
         return;
     }
 
+    // DynamicLibrary::Load uses libPath.wstring() internally (LoadLibraryW), so it is
+    // unaffected by narrow-string codepage entirely -- correct as long as libPath itself
+    // was built correctly above.
     g_module = OSTPlatform::DynamicLibrary::Load(libPath);
     if (!g_module) {
         LOG_WARN("CloudRedirect: failed to load {} (err={})",
-                 libPath.string(), OSTPlatform::DynamicLibrary::GetLastErrorCode());
+                 OSTPlatform::Encoding::PathToUtf8(libPath), OSTPlatform::DynamicLibrary::GetLastErrorCode());
         return;
     }
 
@@ -132,6 +140,10 @@ void Initialize(const char* steamInstallPath) {
     ResolveSymbol(g_module, "CR_GetAchievements",    g_getAchievements);
     ResolveSymbol(g_module, "CR_InstallVtableHooks", g_installVtableHooks);
 
+    // steamInstallPath is passed to cloud_redirect.dll's C ABI as-is (UTF-8 bytes,
+    // unchanged by the ResolveLibraryPath fix above). CloudRedirect is a closed
+    // third-party binary with no available source to confirm what encoding
+    // CR_InitCloudSave expects for steamPath; left untouched rather than guessed at.
     if (!g_initCloudSave(steamInstallPath, &CloudNotify)) {
         LOG_WARN("CloudRedirect: CR_InitCloudSave failed, disabling cloud save redirection");
         g_module = nullptr;
@@ -140,7 +152,7 @@ void Initialize(const char* steamInstallPath) {
 
     g_active.store(true, std::memory_order_release);
     LOG_INFO("CloudRedirect: loaded {} and initialised cloud save redirection",
-             libPath.string());
+             OSTPlatform::Encoding::PathToUtf8(libPath));
 
     if (g_enableStatsSync) {
         g_enableStatsSync(true, true);

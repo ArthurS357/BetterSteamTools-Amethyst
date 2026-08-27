@@ -1,4 +1,5 @@
 #include "PatternLoader.h"
+#include "OSTPlatform/include/Encoding.h"
 #include "OSTPlatform/include/Memory.h"
 #include "OSTPlatform/include/Numbers.h"
 #include "Utils/Logging/Log.h"
@@ -194,8 +195,14 @@ bool Load(OSTPlatform::DynamicLibrary::ModuleHandle module, const std::string& d
                  component, parseErr.empty() ? "no entries" : parseErr);
     }
 
-    // Total failure — popup + disable module's hooks.
-    std::string dllName = fs::path(dllPath).filename().string();
+    // Total failure — popup + disable module's hooks. dllPath is UTF-8 (SteamUIPath/
+    // SteamclientPath); decode via Utf8ToPath rather than the ANSI-codepage
+    // path(std::string) constructor. .filename() is always the hardcoded ASCII
+    // "steamclient64.dll"/"steamui.dll" suffix today, so this has no visible effect
+    // yet, but is correct if that ever changes. The final .string() (not PathToUtf8)
+    // is deliberate: dllName reaches SteamDiagnostics::ShowWarning -> MessageBoxA,
+    // which needs an ANSI-codepage string, not UTF-8.
+    std::string dllName = OSTPlatform::Encoding::Utf8ToPath(dllPath).filename().string();
     std::string sha     = r.sha256.empty() ? "(hash failed)" : r.sha256;
     ShowDownloadFailedPopup(dllName, sha, component);
     g_failedModules.insert(module);

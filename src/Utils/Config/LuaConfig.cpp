@@ -1,4 +1,5 @@
 #include "dllmain.h"
+#include "OSTPlatform/include/Encoding.h"
 #include "OSTPlatform/include/Http.h"
 #include "OSTPlatform/include/Numbers.h"
 #include "Utils/Config/LuaConfig.h"
@@ -27,7 +28,6 @@ namespace LuaConfig{
     std::unordered_map<AppId_t, std::string>DepotKeySet{};
     std::unordered_map<AppId_t, uint64_t>AccessTokenSet{};
     std::unordered_map<AppId_t, std::string>LegacyCDKeySet{};
-    std::unordered_set<AppId_t> PinnedApps{};
     std::unordered_map<uint64_t, ManifestOverride> ManifestOverrides{};
     std::unordered_map<AppId_t, uint64_t> StatSteamIdSet{};
     std::unordered_set<AppId_t> OwnedAppIdSet{};
@@ -191,7 +191,7 @@ namespace LuaConfig{
         lua_setglobal(L, lowercase_name);
     }
 
-    // ── Lua: addappid / addtoken / pinApp / setManifestid ────────
+    // ── Lua: addappid / addtoken / setManifestid ────────
     static int lua_addappid(lua_State* L) {
         // addappid(integer, integer, string)
         int argc = lua_gettop(L);
@@ -332,34 +332,6 @@ namespace LuaConfig{
         if (lua_gettop(L) < 1 || !lua_isstring(L, 1))
             return luaL_error(L, "seteticketurl requires (url: string)");
         EticketUrl = std::string(lua_tostring(L, 1));
-        return 0;
-    }
-
-    // Disconnected feature, kept on purpose: the "pinapp" Lua binding is
-    // commented out below (see register table) so this is currently unreferenced,
-    // but it remains part of the coherent pinApp() public API (LuaConfig.h) and is
-    // documented in the READMEs. [[maybe_unused]] marks the intentional keep and
-    // silences C4505 under /W4.
-    [[maybe_unused]] static int lua_pinApp(lua_State* L) {
-        // pinApp(integer)
-        int argc = lua_gettop(L);
-        // Validate argument count and required argument types.
-        if (argc == 0) {
-            return luaL_error(L, "");
-        }
-        if (!lua_isinteger(L, 1)) {
-            return luaL_error(L, "");
-        }
-
-        // Read the first argument as appid.
-        lua_Integer value = lua_tointeger(L, 1);
-        // Ensure the value fits into uint32_t range.
-        if (value < 0 || value > UINT32_MAX)
-            return luaL_error(L, "");
-        AppId_t AppId = (uint32_t)value;
-
-        PinnedApps.insert(AppId);
-
         return 0;
     }
 
@@ -521,8 +493,6 @@ namespace LuaConfig{
         register_func(g_lua_state, "addprocess", lua_addprocess);
         register_func(g_lua_state, "forcedenuvo", lua_forcedenuvo);
         register_func(g_lua_state, "seteticketurl", lua_seteticketurl);
-        // we don't need it?
-        // register_func(g_lua_state, "pinapp", lua_pinApp);
         register_func(g_lua_state, "setmanifestid", lua_setManifestid);
         register_func(g_lua_state, "http_get", lua_http_get);
         register_func(g_lua_state, "http_post", lua_http_post);
@@ -596,10 +566,6 @@ namespace LuaConfig{
         if (it != LegacyCDKeySet.end())
             return it->second;
         return std::nullopt;
-    }
-
-    bool pinApp(AppId_t AppId) {
-        return PinnedApps.count(AppId);
     }
 
     uint64_t GetStatSteamId(AppId_t AppId) {
@@ -776,13 +742,25 @@ namespace LuaConfig{
     static std::vector<std::string> CollectLuaFiles(const std::string& directory) {
         std::vector<std::string> files;
 
+        // directory is UTF-8 (threaded through from LuaDir/[lua].paths in dllmain.cpp,
+        // ultimately OSTPlatform::DynamicLibrary::GetCurrentDirectoryPath() or TOML
+        // content). Decode once via Utf8ToPath instead of letting each call below
+        // implicitly construct a path(std::string) (ANSI codepage on MSVC) -- for a
+        // non-ASCII Steam install path that silently enumerates zero files instead of
+        // the real stplug-in directory.
+        const std::filesystem::path dirPath = OSTPlatform::Encoding::Utf8ToPath(directory);
+
         std::error_code ec;
-        if (!std::filesystem::exists(directory, ec))
-            std::filesystem::create_directories(directory, ec);
-        if (!std::filesystem::exists(directory, ec) || !std::filesystem::is_directory(directory, ec))
+        if (!std::filesystem::exists(dirPath, ec))
+            std::filesystem::create_directories(dirPath, ec);
+        if (!std::filesystem::exists(dirPath, ec) || !std::filesystem::is_directory(dirPath, ec))
             return files;
 
-        for (const auto& entry : std::filesystem::directory_iterator(directory, ec)) {
+        // entry.path() here is native (wide) from directory_iterator, not derived from
+        // `directory` -- narrowing it via .string() and later re-widening in ParseFile's
+        // path(filePath) is a self-consistent ANSI-codepage round trip, not the
+        // UTF-8-fed-as-ANSI bug above, so it's left as-is.
+        for (const auto& entry : std::filesystem::directory_iterator(dirPath, ec)) {
             if (ec) break;
             if (!entry.is_regular_file()) continue;
             if (entry.path().extension() != ".lua") continue;
@@ -882,11 +860,15 @@ namespace LuaConfig{
         // current working directory (Steam's install root at runtime), matching how the
         // paths are later opened.
         auto key = [](const std::string& p) -> std::string {
+            // p is UTF-8 (same origin as CollectLuaFiles's directory); decode once via
+            // Utf8ToPath rather than the ANSI-codepage path(std::string) constructor,
+            // matching how CollectLuaFiles/ParseDirectory later open the same directory.
+            const std::filesystem::path utf8Path = OSTPlatform::Encoding::Utf8ToPath(p);
             std::error_code ec;
-            fs::path c = fs::weakly_canonical(p, ec);
-            if (ec || c.empty()) c = fs::absolute(fs::path(p), ec);
-            if (ec || c.empty()) c = fs::path(p).lexically_normal();
-            std::string s = c.string();
+            fs::path c = fs::weakly_canonical(utf8Path, ec);
+            if (ec || c.empty()) c = fs::absolute(utf8Path, ec);
+            if (ec || c.empty()) c = utf8Path.lexically_normal();
+            std::string s = OSTPlatform::Encoding::PathToUtf8(c);
             std::transform(s.begin(), s.end(), s.begin(),
                            [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
             return s;

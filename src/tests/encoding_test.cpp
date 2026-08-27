@@ -3,11 +3,20 @@
 // CP_UTF8 with flags=0, so MALFORMED input is replaced with U+FFFD rather than
 // rejected (the functions must not crash and must not return "" for merely
 // unusual-but-valid input). Empty in -> empty out.
+//
+// Utf8ToPath/PathToUtf8 below cover the companion bug: std::filesystem::path
+// (std::string) and path::string() decode/encode via the host's ANSI codepage
+// on MSVC, not UTF-8 -- these two always mean UTF-8 regardless of codepage
+// (see Encoding.h). The non-ASCII cases here are specifically ones that would
+// mis-round-trip through the ANSI-codepage constructor even on a codepage
+// that "supports" accented Latin characters (e.g. Western European 1252),
+// because UTF-8's multi-byte sequences aren't ANSI byte sequences at all.
 
 #include "OSTPlatform/include/Encoding.h"
 
 #include <gtest/gtest.h>
 
+#include <filesystem>
 #include <string>
 
 using namespace OSTPlatform;
@@ -82,4 +91,68 @@ TEST(EncodingMalformed, LoneHighSurrogateWideToUtf8DoesNotCrash) {
     loneSurrogate += L"x";
     const std::string utf8 = Encoding::WideToUtf8(loneSurrogate);
     EXPECT_FALSE(utf8.empty()); // replacement + 'x'
+}
+
+// ---------------------------------------------------------------------------
+// Utf8ToPath / PathToUtf8 — filesystem::path via the C++20 char8_t
+// constructor, bypassing MSVC's ANSI-codepage path(std::string)/string().
+// ---------------------------------------------------------------------------
+TEST(EncodingPathRoundTrip, AsciiIsStable) {
+    const std::string ascii = "SteamTools\\AmethystTool_123.toml";
+    EXPECT_EQ(Encoding::PathToUtf8(Encoding::Utf8ToPath(ascii)), ascii);
+}
+
+TEST(EncodingPathRoundTrip, EmptyMapsToEmpty) {
+    EXPECT_TRUE(Encoding::Utf8ToPath("").empty());
+    EXPECT_TRUE(Encoding::PathToUtf8(std::filesystem::path()).empty());
+}
+
+TEST(EncodingPathFalsePositive, AccentedPortugueseFilenameRoundTrips) {
+    // The exact class of real-world path this bug affects: a Windows user profile or
+    // Steam install directory with accented characters. std::filesystem::path(str) on
+    // MSVC decodes via the host's ANSI codepage, not UTF-8 -- wrong even on a codepage
+    // that "supports" accented Latin characters (e.g. Western European 1252), because
+    // UTF-8's multi-byte sequences are not ANSI byte sequences at all.
+    const std::string accented = u8_to_string(u8"Usuários São Paulo configuração.toml");
+    EXPECT_EQ(Encoding::PathToUtf8(Encoding::Utf8ToPath(accented)), accented);
+}
+
+TEST(EncodingPathFalsePositive, MultibyteFilenameRoundTrips) {
+    const std::string mixed = u8_to_string(u8"日本語ファイル名.toml");
+    const std::filesystem::path path = Encoding::Utf8ToPath(mixed);
+    EXPECT_FALSE(path.empty());
+    EXPECT_EQ(Encoding::PathToUtf8(path), mixed);
+}
+
+TEST(EncodingPathFalsePositive, JoinPreservesNonAsciiParent) {
+    // Mirrors the actual call pattern (Config.cpp, RemoteToml.cpp, CloudRedirectHost.cpp,
+    // ...): decode a UTF-8 base directory once via Utf8ToPath, then join an
+    // ASCII-literal component onto it with operator/.
+    const std::string parent = u8_to_string(u8"C:\\Jogos Steam\\configuração");
+    const std::filesystem::path joined = Encoding::Utf8ToPath(parent) / "amethysttool.toml";
+    EXPECT_EQ(joined.filename().string(), "amethysttool.toml");
+    // Round-tripping the joined path's UTF-8 rendering back through Utf8ToPath must
+    // reproduce the identical path -- confirms the non-ASCII parent survives the join
+    // uncorrupted, not just that the ASCII suffix does.
+    EXPECT_EQ(Encoding::Utf8ToPath(Encoding::PathToUtf8(joined)), joined);
+}
+
+// ---------------------------------------------------------------------------
+// Malicious / malformed: must degrade safely, never crash.
+// ---------------------------------------------------------------------------
+TEST(EncodingPathMalformed, InvalidUtf8DoesNotCrash) {
+    // No in-tree caller can actually produce this: WideToUtf8 always emits
+    // well-formed UTF-8, and TOML content is validated as UTF-8 by toml++ during
+    // parsing before it ever reaches Utf8ToPath. This is defense in depth, not a
+    // documented contract -- unlike Utf8ToWide/WideToUtf8 above, the standard's
+    // char8_t path constructor is free to throw on malformed input instead of
+    // substituting U+FFFD, so both outcomes are accepted here; only a hard crash
+    // (which no catch clause could stop anyway) would be a real failure.
+    const std::string bad = "\xFF\xFE\x80";
+    try {
+        const std::filesystem::path path = Encoding::Utf8ToPath(bad);
+        (void)Encoding::PathToUtf8(path);
+    } catch (const std::exception&) {
+        // Controlled, catchable failure on malformed input is acceptable here.
+    }
 }

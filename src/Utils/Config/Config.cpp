@@ -1,4 +1,5 @@
 #include "Config.h"
+#include "OSTPlatform/include/Encoding.h"
 #include "Utils/Logging/Log.h"
 #include "Utils/SteamMetadata/ManifestClient.h"
 
@@ -46,7 +47,14 @@ namespace {
 
     Snapshot MakeDefaultSnapshot(const std::string& configPath) {
         Snapshot snapshot;
-        std::filesystem::path p(configPath);
+        // configPath is UTF-8 (built from OSTPlatform::DynamicLibrary::GetCurrentDirectoryPath()
+        // in dllmain.cpp); std::filesystem::path(std::string) would decode it via the host's
+        // ANSI codepage on MSVC, mangling any non-ASCII Steam install path. logDir stays
+        // .string() (ANSI codepage) on purpose: it flows into Log.cpp's spdlog file sinks,
+        // which open files by narrow name without UTF-8 awareness (no SPDLOG_WCHAR_FILENAMES),
+        // so it must match the codepage those sinks expect -- only the decode of configPath
+        // itself needed fixing.
+        std::filesystem::path p = OSTPlatform::Encoding::Utf8ToPath(configPath);
         snapshot.logDir = (p.parent_path() / "amethysttool").string();
         return snapshot;
     }
@@ -88,7 +96,7 @@ namespace {
 
     LoadResult Load(const std::string& configPath) {
         Snapshot snapshot = MakeDefaultSnapshot(configPath);
-        if (!std::filesystem::exists(configPath)) {
+        if (!std::filesystem::exists(OSTPlatform::Encoding::Utf8ToPath(configPath))) {
             LOG_INFO("Config file not found, using defaults");
             ApplyManifestProvider(snapshot.manifestProvider);
             LoadResult result = ApplySnapshotLocked(snapshot);
@@ -170,7 +178,11 @@ namespace {
 
             // [[inject]]
             if (auto arr = tbl["inject"].as_array()) {
-                std::filesystem::path steamDir = std::filesystem::path(configPath).parent_path();
+                // Both configPath and the TOML "path" value below are UTF-8 (TOML is
+                // UTF-8 by spec; configPath per the note in MakeDefaultSnapshot), so they
+                // go through Utf8ToPath rather than the ANSI-codepage path(std::string)
+                // constructor.
+                std::filesystem::path steamDir = OSTPlatform::Encoding::Utf8ToPath(configPath).parent_path();
                 for (auto& node : *arr) {
                     auto t = node.as_table();
                     if (!t) continue;
@@ -178,14 +190,24 @@ namespace {
                     if (!path || path->empty()) continue;
 
                     // Bare names resolve next to steam.exe.
-                    std::filesystem::path full = *path;
+                    std::filesystem::path full = OSTPlatform::Encoding::Utf8ToPath(*path);
                     if (full.is_relative()) full = steamDir / full;
                     if (!std::filesystem::exists(full)) {
-                        LOG_WARN("inject dll not found: {}", full.string());
+                        LOG_WARN("inject dll not found: {}", OSTPlatform::Encoding::PathToUtf8(full));
                         continue;
                     }
 
                     InjectDll dll;
+                    // dll.path stays ANSI-codepage .string(), not PathToUtf8: it crosses
+                    // into Pipe/Features/Injection/Injection.cpp (out of scope here --
+                    // circumvention/injection logic), which reconstructs a
+                    // std::filesystem::path from it with the default (ANSI) constructor.
+                    // Keeping both ends on the same codepage is deliberate; full is now
+                    // decoded correctly above, so this round-trip is correct for any
+                    // path representable in the host's ANSI codepage (the previous
+                    // double ANSI-decode of UTF-8 bytes was wrong for any non-ASCII
+                    // character). A locale-independent fix would require touching
+                    // Injection.cpp too.
                     dll.path = full.string();
                     if (auto val = (*t)["when_cmdline"].value<std::string>()) dll.whenCmdline = *val;
                     if (auto val = (*t)["all_games"].value<bool>())           dll.allGames   = *val;
