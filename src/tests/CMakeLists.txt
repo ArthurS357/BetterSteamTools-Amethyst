@@ -20,11 +20,14 @@
 # Logging is diagnostic only and does not affect the parse/encode/hash results
 # these tests assert, so behaviour under test is identical.
 #
-# Ticket/URI/config PARSERS (AppTicket, TokeerBridge, Config::Load) are TU-coupled
-# to Lua, the hook engine, WinHTTP and MessageBox and are NOT unit-testable without
-# an interface extraction — tracked as pending in the report, not forced here.
-# Config::MigrateLegacyConfig is the exception: it depends only on <filesystem>, so
-# it is extracted into its own TU (ConfigMigration.cpp) and covered here directly.
+# Config::MigrateLegacyConfig, AppTicket::ExtractSteamIdFromTicketBytes, and the
+# TokeerBridge hex/JSON/URI helpers are the exceptions: each was extracted into
+# its own dependency-light TU (ConfigMigration.cpp, TicketParsing.cpp,
+# TokeerParsing.cpp) specifically so it compiles here without pulling in Lua,
+# the hook engine, WinHTTP, or MessageBox. The rest of AppTicket/TokeerBridge
+# (credential-store I/O, HTTP requests, dialogs) and Config::Load itself remain
+# TU-coupled and are not unit-testable without further extraction — tracked as
+# pending in the report, not forced here.
 # ---------------------------------------------------------------------------
 
 include(GTestDep)   # our recipe: GTest::gtest_main / GTest::gmock (/MT)
@@ -39,6 +42,8 @@ add_executable(AmethystToolTests
     hash_test.cpp
     fnvhash_test.cpp
     config_migration_test.cpp
+    ticket_parsing_test.cpp
+    tokeer_parsing_test.cpp
 
     # Units under test, compiled directly (no OSTPlatform lib link) — see header.
     "${_ostp}/Numbers.cpp"
@@ -47,6 +52,10 @@ add_executable(AmethystToolTests
     # ConfigMigration depends only on <filesystem>; compiled directly so the test
     # stays free of the Lua/toml/WinHTTP coupling of the rest of Utils/Config.
     "${CMAKE_CURRENT_SOURCE_DIR}/../Utils/Config/ConfigMigration.cpp"
+    # Pure parsing logic split out of AppTicket.cpp / TokeerBridge.cpp precisely
+    # so it compiles here without Hooks_Decryption/LuaConfig/Http/Dialog.
+    "${CMAKE_CURRENT_SOURCE_DIR}/../Utils/Tickets/TicketParsing.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../Utils/Tokeer/TokeerParsing.cpp"
 )
 
 # src/ root for production-style header spellings ("Utils/Support/FnvHash.h",

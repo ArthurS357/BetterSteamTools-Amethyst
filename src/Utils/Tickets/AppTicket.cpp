@@ -6,7 +6,6 @@
 
 namespace AppTicket {
     constexpr AppId_t kLocalAppTicketSourceAppId = 7;
-    constexpr size_t kSteamIdTicketMinimumSize = 16;
 
     static uint64_t GetSteamIDFromCredentialStore(AppId_t appId) {
         uint64_t steamId = 0;
@@ -144,12 +143,6 @@ namespace AppTicket {
 
         LOG_INFO("Wrote SteamID for AppId {} ({})", appId, steamId);
         return true;
-    }
-
-    uint64_t ExtractSteamIdFromTicketBytes(const std::vector<uint8_t>& ticket) {
-        // Layout: ticket bytes start with [uint32 Size][uint32 Version][uint64 SteamID][...].
-        if (ticket.size() < kSteamIdTicketMinimumSize) return 0;
-        return reinterpret_cast<const uint64_t*>(ticket.data())[1];
     }
 
     uint64_t GetSpoofSteamID(AppId_t appId) {

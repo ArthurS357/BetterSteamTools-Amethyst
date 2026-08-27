@@ -1,6 +1,7 @@
 // xinput1_4.dll HiJack Project - True Dynamic Wrapper (With Undocumented Ordinals)
 #include <windows.h>
 #include <cstring>
+#include <cwchar>
 #include <string>
 
 // ─── 1. Real XInput Function Pointers ───────────────────────────
@@ -121,11 +122,14 @@ extern "C" {
 
 // ─── 4. AmethystTool Injection ───────────────────────────────────
 BOOL AmethystToolLoad() {
-    char exePath[MAX_PATH];
-    if (GetModuleFileNameA(NULL, exePath, MAX_PATH)) {
-        const char* exeName = strrchr(exePath, '\\');
+    // GetModuleFileNameW: see dllmain.cpp's IsSteamHost for why the ANSI
+    // variant is avoided even though only the pure-ASCII "steam.exe" suffix
+    // is compared here.
+    wchar_t exePath[MAX_PATH];
+    if (GetModuleFileNameW(NULL, exePath, MAX_PATH)) {
+        const wchar_t* exeName = wcsrchr(exePath, L'\\');
         exeName = exeName ? exeName + 1 : exePath;
-        if (_stricmp(exeName, "steam.exe") != 0) return TRUE;
+        if (_wcsicmp(exeName, L"steam.exe") != 0) return TRUE;
     }
     return LoadLibraryA("AmethystTool.dll") != NULL;
 }

@@ -14,6 +14,7 @@
 #include "OSTPlatform/include/DynamicLibrary.h"
 #include "OSTPlatform/include/Thread.h"
 
+#include <cwchar>
 #include <string>
 #include <windows.h>
 
@@ -158,11 +159,18 @@ static uint32_t InitThread(OSTPlatform::DynamicLibrary::ModuleHandle selfModule)
 // export does its work standalone.
 static bool IsSteamHost()
 {
-    char exePath[MAX_PATH];
-    if (!GetModuleFileNameA(nullptr, exePath, MAX_PATH)) return false;
-    const char* name = strrchr(exePath, '\\');
+    // GetModuleFileNameW (not the ANSI variant): the exe path can contain
+    // non-ASCII bytes anywhere before the final component (a Windows profile
+    // name, an install directory chosen by the user, ...) that the ANSI
+    // codepage can misdecode — including, on DBCS codepages, mangling '\\'
+    // detection itself if a lead byte happens to combine with 0x5C. Only the
+    // final "steam.exe" segment is compared and it's pure ASCII either way,
+    // but resolving the path in UTF-16 first avoids that class of bug entirely.
+    wchar_t exePath[MAX_PATH];
+    if (!GetModuleFileNameW(nullptr, exePath, MAX_PATH)) return false;
+    const wchar_t* name = wcsrchr(exePath, L'\\');
     name = name ? name + 1 : exePath;
-    return _stricmp(name, "steam.exe") == 0;
+    return _wcsicmp(name, L"steam.exe") == 0;
 }
 
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD dwReason, PVOID pvReserved)

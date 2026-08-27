@@ -2,6 +2,7 @@
 
 #include <windows.h>
 #include <cstring>
+#include <cwchar>
 
 
 #pragma comment(linker, "/EXPORT:DllCanUnloadNow=DWMAPI.DllCanUnloadNow,@111")
@@ -114,12 +115,15 @@
 // call this without additional synchronisation.
 BOOL AmethystToolLoad()
 {
-    char exePath[MAX_PATH];
-    if (GetModuleFileNameA(NULL, exePath, MAX_PATH))
+    // GetModuleFileNameW: see dllmain.cpp's IsSteamHost for why the ANSI
+    // variant is avoided even though only the pure-ASCII "steam.exe" suffix
+    // is compared here.
+    wchar_t exePath[MAX_PATH];
+    if (GetModuleFileNameW(NULL, exePath, MAX_PATH))
     {
-        const char* exeName = strrchr(exePath, '\\');
+        const wchar_t* exeName = wcsrchr(exePath, L'\\');
         exeName = exeName ? exeName + 1 : exePath;
-        if (_stricmp(exeName, "steam.exe") != 0)
+        if (_wcsicmp(exeName, L"steam.exe") != 0)
             return TRUE;   // not Steam — let the proxy load, but don't inject
     }
     return LoadLibraryA("AmethystTool.dll") != NULL;

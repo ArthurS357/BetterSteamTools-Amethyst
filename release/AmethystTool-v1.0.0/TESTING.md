@@ -33,7 +33,7 @@ A virtual machine is the safest option; a spare physical machine works too.
    Use the matching build for what you're testing — Release for normal use, Debug if you want the per-module log files (see step 5).
    - Release: `build/Release/…`
    - Debug: `build/Debug/…`
-3. If your antivirus quarantines the DLLs, that is an expected false positive for injection/Detours code — add an exclusion for the three specific files (not the whole Steam folder) or restore from quarantine. See [README → Antivirus and SmartScreen](README.md#antivirus-and-smartscreen).
+3. If your antivirus quarantines the DLLs, that is an expected false positive for injection/Detours code — add an exclusion for the Steam root folder or restore from quarantine. See [README → Antivirus and SmartScreen](README.md#antivirus-and-smartscreen).
 
 ## 4. Configure the TOML
 
