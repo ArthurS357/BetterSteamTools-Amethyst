@@ -124,8 +124,6 @@ addappid(1361510) -- 解锁 appid 为 1361510 的游戏
 addappid(1361511, 0,"5954562e7f5260400040a818bc29b60b335bb690066ff767e20d145a3b6b4af0") -- 解锁 appid 为 1361511 的游戏，depotKey 为 "5954562e7f5260400040a818bc29b60b335bb690066ff767e20d145a3b6b4af0" 
 
 addtoken(1361510,"2764735786934684318") -- 为 appid 为 1361510 的游戏添加访问令牌 ("2764735786934684318") 
--- 不再支持：
---pinApp(1361510) -- 固定 appid 为 1361510 的游戏以防止其被更新
 
 setManifestid(1361511,"5656605350306673283") -- 固定 depotid:1361511 manifest_gid:5656605350306673283，大小默认为 0
 setManifestid(1361511,"5656605350306673283", 12345678) -- 同上，但指定明确大小
@@ -274,13 +272,38 @@ url_template = "https://your.server/{channel}/{component}/{sha256}.toml"
 
 AmethystTool 的工作方式是加载进 Steam 并在进程内安装 hook（通过 Microsoft Detours）。这正是杀毒软件启发式所查找的技术，因此**未签名的构建很可能被标记或隔离**——这是该技术固有的误报，而非恶意软件的证据。已观察到 Kaspersky、Defender 等会隔离刚构建出的 DLL。
 
-如果你的杀毒软件删除或拦截了这些 DLL：
+### 如果你的杀毒软件删除或拦截了这些 DLL
 
-- 为包含 `AmethystTool.dll`、`dwmapi.dll` 和 `xinput1_4.dll` 的文件夹（Steam 根目录）添加排除项，使实时扫描不再处理它们。
-- 如果某个构建已被隔离，先从隔离区恢复再添加排除项，或在排除输出文件夹后重新构建。
-- Windows SmartScreen 可能在首次运行时发出警告，因为这些二进制文件未签名——对于自行构建、未签名的工具，这是预期行为。
+排除这三个具体文件，而不是整个 Steam 文件夹——这样 Valve 放在那里的其他内容仍受实时扫描保护：
 
-只排除你自己构建或信任其内容的文件夹。如果你不愿削弱防护，请改在隔离环境中运行本工具——参见 [TESTING.md](TESTING.md)。你可以在 [Steam 版本兼容性](#steam-版本兼容性)和[关于本分支](#关于本分支-amethyst)章节中审查本工具通过网络发送的确切内容。
+- `<Steam>\AmethystTool.dll`
+- `<Steam>\dwmapi.dll`
+- `<Steam>\xinput1_4.dll`
+
+大多数杀毒软件的排除列表支持单个文件路径（不只是文件夹）；如果你的产品支持，优先使用文件路径的形式。如果某个构建已被隔离，先从隔离区恢复再添加排除项，或在排除这三个路径后重新构建。排除整个 Steam 根目录同样有效，且在多次重新构建之间更易维护，但它授予的信任比工具实际需要的更宽——如果杀毒软件支持，优先选择文件级排除。
+
+Windows SmartScreen 可能在首次运行时发出警告，因为这些二进制文件未签名——对于自行构建、未签名的工具，这是预期行为（真正能消除该警告的方法见下方"代码签名"）。
+
+### 代码签名
+
+签名 DLL 并不会改变杀毒软件启发式所检测的内容（进程内 hook 看起来仍然一样），但可以让二进制文件可追溯到你本人，并且在使用合适证书类型的情况下，能随时间降低 SmartScreen 的阻力。
+
+- **自签名证书（仅限个人使用）**——证明 DLL 在*你自己构建之后*未被篡改，但除非对方导入你的证书，否则不会被其他机器信任。主要用于检测本地构建是否损坏或被替换。
+  ```powershell
+  New-SelfSignedCertificate -Type CodeSigning -Subject "CN=YourName" -CertStoreLocation Cert:\CurrentUser\My
+  signtool sign /sha1 <thumbprint> /fd SHA256 /t http://timestamp.digicert.com AmethystTool.dll dwmapi.dll xinput1_4.dll
+  ```
+  `signtool` 随 Windows SDK 一起提供；证书指纹由上面的 `New-SelfSignedCertificate` 命令输出。
+- **公共代码签名证书**——由 DigiCert、Sectigo、SSL.com 等 CA 签发，默认即被其他机器信任。需要每年付费并通过身份验证；这是向他人分发构建版本的人需要做的决定，本项目无法替你完成。**标准（OV）证书*不会*立即消除 SmartScreen 警告**——微软 SmartScreen 的信誉是随时间/下载量累积的，与是否签名无关；只有 **EV（扩展验证）**证书才能获得即时信誉，而 EV 证书是更昂贵的等级，要求将密钥存储在硬件令牌/HSM 中。
+- 无论哪种方式，为注入/hook 工具签名都**不能保证**杀毒软件停止标记它——启发式引擎针对的是*行为*（对其他进程执行 WriteProcessMemory、IAT/inline hook），有效签名只是众多信号之一，不能覆盖其他信号。
+
+### 报告误报
+
+如果你想让特定厂商停止标记你的构建，可以直接提交——提交清单和链接（Microsoft Defender、Kaspersky 等）见 [AV_WHITELIST.md](AV_WHITELIST.md)。
+
+### 如果你不想添加任何排除项
+
+只排除你自己构建或信任的文件。如果你不愿削弱防护，请改在隔离环境中运行本工具——参见 [TESTING.md](TESTING.md)。你可以在 [Steam 版本兼容性](#steam-版本兼容性)和[关于本分支](#关于本分支-amethyst)章节中审查本工具通过网络发送的确切内容。
 
 ## 构建
 

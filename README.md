@@ -126,8 +126,6 @@ addappid(1361510) -- unlock game with appid 1361510
 addappid(1361511, 0,"5954562e7f5260400040a818bc29b60b335bb690066ff767e20d145a3b6b4af0") -- unlock game with appid 1361511 depotKey is "5954562e7f5260400040a818bc29b60b335bb690066ff767e20d145a3b6b4af0" 
 
 addtoken(1361510,"2764735786934684318") -- add access token ("2764735786934684318") for game with appid 1361510 
--- No Longer Supported:
---pinApp(1361510) -- pin game with appid 1361510 to prevent it from being updated
 
 setManifestid(1361511,"5656605350306673283") -- pin depotid:1361511 manifest_gid:5656605350306673283, size defaults to 0
 setManifestid(1361511,"5656605350306673283", 12345678) -- same but with explicit size
@@ -252,6 +250,19 @@ url_template = "https://your.server/{channel}/{component}/{sha256}.toml"
 # url_template = "https://fast.jsdelivr.net/gh/OpenSteam001/steam-monitor@{channel}/{component}/{sha256}.toml"
 ```
 
+Your server must serve, for each request, a TOML document keyed by function name, where each entry has an optional `rva` (hex string, offset from module base) and/or `sig` (IDA-style byte pattern, `??` for wildcard bytes) — `rva` is tried first, `sig` is the fallback if the RVA doesn't resolve or isn't present:
+
+```toml
+[BBuildAndAsyncSendFrame]
+rva = "0x1A2B30"
+sig = "48 89 5C 24 ?? 57 48 83 EC 20"
+
+[BuildDepotDependency]
+sig = "40 53 48 83 EC ?? 48 8B D9"
+```
+
+A 404 for a given `{sha256}` is treated as "no pattern published yet for this Steam build" (not an error) — see [Steam version compatibility](#steam-version-compatibility) above for the full lookup/fallback order.
+
 ### Debug logging
 
 Debug builds write per-module log files under `<Steam>/amethysttool/`:
@@ -280,13 +291,38 @@ The log level is controlled by `[log] level` in `amethysttool.toml`.
 
 AmethystTool works by loading into Steam and installing in-process hooks (via Microsoft Detours). These are exactly the techniques antivirus heuristics look for, so **an unsigned build will very likely be flagged or quarantined** — this is a false positive inherent to the technique, not evidence of malware. Kaspersky, Defender, and others have been observed quarantining the freshly built DLLs.
 
-If your antivirus removes or blocks the DLLs:
+### If your antivirus removes or blocks the DLLs
 
-- Add an exclusion for the folder that holds `AmethystTool.dll`, `dwmapi.dll`, and `xinput1_4.dll` (the Steam root directory), so on-access scanning leaves them in place.
-- If a build was already quarantined, restore it from quarantine and then add the exclusion, or rebuild after excluding the output folder.
-- Windows SmartScreen may warn on first run because the binaries are unsigned — this is expected for a self-built, unsigned tool.
+Exclude the three specific files, not the whole Steam folder — that keeps on-access scanning active for everything else Valve puts there:
 
-Only exclude folders whose contents you built or trust. If you would rather not weaken your protection, run the tool in an isolated environment instead — see [TESTING.md](TESTING.md). You can audit exactly what the tool sends over the network in the [Steam version compatibility](#steam-version-compatibility) and [About this fork](#about-this-fork-amethyst) sections.
+- `<Steam>\AmethystTool.dll`
+- `<Steam>\dwmapi.dll`
+- `<Steam>\xinput1_4.dll`
+
+Most antivirus exclusion lists accept individual file paths (not just folders); use the file-path form if your product offers it. If a build was already quarantined, restore it from quarantine and then add the exclusions, or rebuild after excluding the three paths. A whole-folder exclusion for the Steam root also works and is simpler to keep correct across rebuilds, but it is a strictly larger trust grant than the tool needs — prefer the file-level form when your AV supports it.
+
+Windows SmartScreen may warn on first run because the binaries are unsigned — this is expected for a self-built, unsigned tool (see "Code signing" below for what actually removes that warning).
+
+### Code signing
+
+Signing the DLLs does not change what the antivirus heuristic is reacting to (in-process hooking still looks the same), but it does let you attribute the binary to yourself and, with the right certificate type, can reduce SmartScreen friction over time.
+
+- **Self-signed certificate (personal use only)** — proves the DLL wasn't tampered with *after your own build*, but is not trusted by anyone else's machine unless they import your certificate. Useful mainly to detect a corrupted or replaced local build.
+  ```powershell
+  New-SelfSignedCertificate -Type CodeSigning -Subject "CN=YourName" -CertStoreLocation Cert:\CurrentUser\My
+  signtool sign /sha1 <thumbprint> /fd SHA256 /t http://timestamp.digicert.com AmethystTool.dll dwmapi.dll xinput1_4.dll
+  ```
+  `signtool` ships with the Windows SDK; the certificate thumbprint is printed by the `New-SelfSignedCertificate` command above.
+- **Public code-signing certificate** — trusted by other machines out of the box, from a CA such as DigiCert, Sectigo, or SSL.com. This costs money annually and requires identity verification; it is a decision for whoever distributes builds to other people, not something this project can do on your behalf. **A standard (OV) certificate does *not* immediately clear SmartScreen** — Microsoft's SmartScreen reputation is earned over time/download volume regardless of signature; only an **EV (Extended Validation)** certificate grants instant reputation, and EV certs are the more expensive tier requiring hardware-token/HSM key storage.
+- Either way, signing an injection/hooking tool does **not** guarantee an antivirus stops flagging it — heuristic engines key off *behavior* (WriteProcessMemory into another process, IAT/inline hooks), and a valid signature is one signal among many, not an override.
+
+### Reporting a false positive
+
+If you want the specific vendor to stop flagging your build, submit it directly — see [AV_WHITELIST.md](AV_WHITELIST.md) for the submission checklist and links (Microsoft Defender, Kaspersky, and others).
+
+### If you'd rather not add exclusions at all
+
+Only exclude files you built or trust. If you would rather not weaken your protection, run the tool in an isolated environment instead — see [TESTING.md](TESTING.md). You can audit exactly what the tool sends over the network in the [Steam version compatibility](#steam-version-compatibility) and [About this fork](#about-this-fork-amethyst) sections.
 
 ## Build
 

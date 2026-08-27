@@ -118,8 +118,6 @@ addappid(1361510) -- desbloquea el juego con appid 1361510
 addappid(1361511, 0,"5954562e7f5260400040a818bc29b60b335bb690066ff767e20d145a3b6b4af0") -- desbloquea el juego con appid 1361511, la clave del depósito (depotKey) es "5954562e7f5260400040a818bc29b60b335bb690066ff767e20d145a3b6b4af0" 
 
 addtoken(1361510,"2764735786934684318") -- añade el token de acceso ("2764735786934684318") para el juego con appid 1361510 
--- Ya no está soportado:
---pinApp(1361510) -- fija el juego con appid 1361510 para evitar que se actualice
 
 setManifestid(1361511,"5656605350306673283") -- fija depotid:1361511 manifest_gid:5656605350306673283, el tamaño por defecto es 0
 setManifestid(1361511,"5656605350306673283", 12345678) -- lo mismo, pero con un tamaño explícito
@@ -267,13 +265,38 @@ El nivel de registro se controla mediante `[log] level` en `amethysttool.toml`.
 
 AmethystTool funciona cargándose dentro de Steam e instalando hooks en el proceso (mediante Microsoft Detours). Estas son exactamente las técnicas que buscan las heurísticas de los antivirus, así que **es muy probable que una compilación sin firmar sea marcada o puesta en cuarentena** — se trata de un falso positivo inherente a la técnica, no de una prueba de malware. Se ha observado que Kaspersky, Defender y otros ponen en cuarentena las DLL recién compiladas.
 
-Si tu antivirus elimina o bloquea las DLL:
+### Si tu antivirus elimina o bloquea las DLL
 
-- Añade una exclusión para la carpeta que contiene `AmethystTool.dll`, `dwmapi.dll` y `xinput1_4.dll` (el directorio raíz de Steam), para que el análisis en tiempo real las deje en su sitio.
-- Si una compilación ya fue puesta en cuarentena, restáurala y luego añade la exclusión, o recompila tras excluir la carpeta de salida.
-- Windows SmartScreen puede advertir en la primera ejecución porque los binarios no están firmados — es lo esperado en una herramienta autocompilada y sin firmar.
+Excluye los tres archivos específicos, no toda la carpeta de Steam — así el análisis en tiempo real sigue activo para todo lo demás que Valve coloca ahí:
 
-Excluye solo carpetas cuyo contenido hayas compilado o en el que confíes. Si prefieres no debilitar tu protección, ejecuta la herramienta en un entorno aislado — consulta [TESTING.md](TESTING.md). Puedes auditar exactamente qué envía la herramienta por la red en las secciones [Compatibilidad con versiones de Steam](#compatibilidad-con-versiones-de-steam) y [Acerca de este fork](#acerca-de-este-fork-amethyst).
+- `<Steam>\AmethystTool.dll`
+- `<Steam>\dwmapi.dll`
+- `<Steam>\xinput1_4.dll`
+
+La mayoría de los antivirus aceptan rutas de archivo individuales en sus listas de exclusión (no solo carpetas); usa esa forma si tu producto la ofrece. Si una compilación ya fue puesta en cuarentena, restáurala y luego añade las exclusiones, o recompila tras excluir las tres rutas. Excluir toda la carpeta raíz de Steam también funciona y es más simple de mantener entre recompilaciones, pero concede más confianza de la que la herramienta necesita — prefiere la exclusión por archivo cuando tu antivirus lo permita.
+
+Windows SmartScreen puede advertir en la primera ejecución porque los binarios no están firmados — es lo esperado en una herramienta autocompilada y sin firmar (ver "Firma de código" abajo para lo que realmente elimina ese aviso).
+
+### Firma de código
+
+Firmar las DLL no cambia lo que detecta la heurística del antivirus (el hooking en proceso se ve igual), pero te permite atribuirte el binario y, con el tipo de certificado adecuado, puede reducir la fricción de SmartScreen con el tiempo.
+
+- **Certificado autofirmado (solo uso personal)** — prueba que la DLL no fue alterada *después de tu propia compilación*, pero no es de confianza para otras máquinas a menos que importen tu certificado. Útil sobre todo para detectar una compilación local corrupta o reemplazada.
+  ```powershell
+  New-SelfSignedCertificate -Type CodeSigning -Subject "CN=TuNombre" -CertStoreLocation Cert:\CurrentUser\My
+  signtool sign /sha1 <thumbprint> /fd SHA256 /t http://timestamp.digicert.com AmethystTool.dll dwmapi.dll xinput1_4.dll
+  ```
+  `signtool` viene con el Windows SDK; el thumbprint del certificado lo imprime el comando `New-SelfSignedCertificate` de arriba.
+- **Certificado de firma de código público** — de confianza para otras máquinas de forma nativa, emitido por una CA como DigiCert, Sectigo o SSL.com. Tiene costo anual y requiere verificación de identidad; es una decisión de quien distribuya compilaciones a terceros, no algo que este proyecto pueda hacer por ti. **Un certificado estándar (OV) *no* elimina SmartScreen de inmediato** — la reputación de SmartScreen de Microsoft se gana con el tiempo/volumen de descargas independientemente de la firma; solo un certificado **EV (Extended Validation)** otorga reputación instantánea, y los EV son el nivel más caro, que exige almacenamiento de la clave en token de hardware/HSM.
+- En cualquier caso, firmar una herramienta de inyección/hooking **no garantiza** que el antivirus deje de marcarla — los motores heurísticos reaccionan al *comportamiento* (WriteProcessMemory en otro proceso, hooks IAT/inline), y una firma válida es una señal más, no un permiso que anule las demás.
+
+### Reportar un falso positivo
+
+Si quieres que un proveedor específico deje de marcar tu compilación, repórtalo directamente — consulta [AV_WHITELIST.md](AV_WHITELIST.md) para la checklist y los enlaces de envío (Microsoft Defender, Kaspersky, y otros).
+
+### Si prefieres no añadir exclusiones
+
+Excluye solo archivos que hayas compilado o en los que confíes. Si prefieres no debilitar tu protección, ejecuta la herramienta en un entorno aislado — consulta [TESTING.md](TESTING.md). Puedes auditar exactamente qué envía la herramienta por la red en las secciones [Compatibilidad con versiones de Steam](#compatibilidad-con-versiones-de-steam) y [Acerca de este fork](#acerca-de-este-fork-amethyst).
 
 ## Compilación
 

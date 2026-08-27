@@ -20,7 +20,6 @@ namespace LuaConfig{
     // setlegacycdkey(appid, "KEY"); nullopt when no override is configured.
     std::optional<std::string> GetLegacyCDKey(AppId_t appId);
     uint64_t GetStatSteamId(AppId_t appId);
-    bool pinApp(AppId_t appId);
     uint32_t GetPurchaseTime(AppId_t appId);
 
     struct ManifestOverride {
