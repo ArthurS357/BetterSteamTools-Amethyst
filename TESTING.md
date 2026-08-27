@@ -23,7 +23,7 @@ A virtual machine is the safest option; a spare physical machine works too.
 
 1. Build the project on your dev machine (see [README → Build](README.md#build)):
    ```powershell
-   build.bat
+   .\build.ps1
    ```
 2. Copy the three generated DLLs into the **Steam root directory** (the folder containing `steam.exe`) on the test machine:
    - `AmethystTool.dll`

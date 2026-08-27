@@ -328,20 +328,42 @@ Only exclude files you built or trust. If you would rather not weaken your prote
 
 ### Requirements
 - Windows 10/11
-- CMake 3.20+
-- Visual Studio 2022 with MSVC (x64 toolchain)
+- Visual Studio 2022 (Build Tools or full IDE) with the "Desktop development with C++" workload — this provides the MSVC x64 toolchain and, normally, the bundled CMake/Ninja component
+- CMake 3.25+ and Ninja, if not already provided by the VS component above
 
 ### Runtime requirements
 - Outbound HTTPS access to `raw.githubusercontent.com` on first launch after a Steam update (see [Steam version compatibility](#steam-version-compatibility)). Cached afterwards.
 
 ### Quick build
 ```powershell
-build.bat
+.\build.ps1
 ```
+`build.ps1` automates the full pipeline: it finds your Visual Studio 2022 install and `vcvars64.bat` (checking `vswhere`, then the standard BuildTools/Community/Professional/Enterprise paths), loads the MSVC compiler environment, locates `cmake`/`ninja` (VS-bundled or standalone) even when neither is on `PATH`, configures the `ninja-multi` preset, builds **and tests** both Release and Debug, then verifies the produced DLL's ABI (`TokeerUri` at ordinal 1) and static-CRT linkage (no `vcruntime140`/`msvcp140`/`ucrtbase` dependency). It never edits source and is safe to re-run: without `-Clean` it's a normal incremental build.
+
+```powershell
+.\build.ps1 -Clean
+```
+Deletes the object directories for this project's own targets (`AmethystTool`, `OpenSteamTool`, `OSTPlatform`, `dwmapi`, `xinput1_4`, `AmethystToolTests`) before rebuilding — use this to get an authoritative warning count. Third-party dependencies (googletest, spdlog, protobuf, tomlplusplus, Detours, Lua, and the `.deps/` source cache) are left untouched, so they aren't rebuilt from source every time.
+
+If your toolchain lives somewhere nonstandard, set `$env:BST_VCVARS64` to the full path of your `vcvars64.bat` before running the script.
+
+Prefer the manual route? `build.bat` (from a Developer Command Prompt, or with `cmake`/`ninja` already on `PATH`) still works and does the same configure+build.
 
 ### Output
 - Debug: `build/Debug/AmethystTool.dll`, `build/Debug/dwmapi.dll`, `build/Debug/xinput1_4.dll`
 - Release: `build/Release/AmethystTool.dll`, `build/Release/dwmapi.dll`, `build/Release/xinput1_4.dll`
+
+### Packaging a release
+```powershell
+.\release.ps1 -Version 1.2.0
+```
+Builds (via `build.ps1 -Clean`), then assembles `release/AmethystTool-v<Version>/` with the three DLLs, `amethysttool.example.toml` (renamed to `amethysttool.toml`), `README.md`, `TESTING.md`, `AV_WHITELIST.md`, and a generated `INSTALL.txt`; zips it to `release/AmethystTool-v<Version>.zip`; writes `release/RELEASE_NOTES-v<Version>.md` from the commit log since the previous tag; and creates a **local** annotated tag `v<Version>`. It never commits, pushes, or touches GitHub — the final output tells you the `git push` / `gh release create` commands to run yourself.
+
+Flags:
+- `-SkipBuild` — package whatever is already in `build\Release` instead of rebuilding.
+- `-SkipTests` — only meaningful with `-SkipBuild`: skip the independent `ctest` re-verification pass and package an unverified build.
+
+Re-running with the same `-Version` is idempotent: the package directory and zip are regenerated, and if the tag already exists at the current commit it's left alone (it refuses to move a tag that points somewhere else — delete it yourself first if that's what you intend).
 
 ## Disclaimer
 This project is provided for research and educational purposes only. You are responsible for complying with local laws, platform terms of service, and software licenses.
