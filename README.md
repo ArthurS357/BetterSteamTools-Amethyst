@@ -164,6 +164,12 @@ timeout_connect_ms = 5000
 timeout_send_ms    = 10000
 timeout_recv_ms    = 10000
 
+[http]
+# User-Agent for every outgoing HTTP request. Default: "OpenSteamTool/1.0" —
+# the value manifest.opensteamtool.com's WAF allowlists. Only change this if
+# you point [manifest] url at your own server.
+# user_agent = "OpenSteamTool/1.0"
+
 [stats]
 # Query https://stats.opensteamtool.com/{appid} when no Lua setStat override exists.
 # Priority: setStat > stats API > hardcoded preset SteamID.

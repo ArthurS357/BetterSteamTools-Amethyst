@@ -28,6 +28,10 @@
 # (credential-store I/O, HTTP requests, dialogs) and Config::Load itself remain
 # TU-coupled and are not unit-testable without further extraction — tracked as
 # pending in the report, not forced here.
+#
+# http_user_agent_test.cpp only includes OSTPlatform/include/Http.h (not
+# Http.cpp): kDefaultUserAgent is a header-only constexpr precisely so this
+# regression test needs no WinHTTP link dependency either.
 # ---------------------------------------------------------------------------
 
 include(GTestDep)   # our recipe: GTest::gtest_main / GTest::gmock (/MT)
@@ -44,6 +48,7 @@ add_executable(AmethystToolTests
     config_migration_test.cpp
     ticket_parsing_test.cpp
     tokeer_parsing_test.cpp
+    http_user_agent_test.cpp
 
     # Units under test, compiled directly (no OSTPlatform lib link) — see header.
     "${_ostp}/Numbers.cpp"

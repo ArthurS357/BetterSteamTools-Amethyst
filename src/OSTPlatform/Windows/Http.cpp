@@ -9,10 +9,14 @@
 
 #include <chrono>
 #include <format>
+#include <mutex>
 #include <string>
 
 namespace OSTPlatform::Http {
 namespace {
+
+std::mutex g_userAgentMutex;
+std::wstring g_userAgent = kDefaultUserAgent;
 
 struct ParsedUrl {
     std::wstring host;
@@ -59,6 +63,16 @@ ParsedUrl ParseUrl(const char* rawUrl) {
 
 } // namespace
 
+void SetUserAgent(const wchar_t* userAgent) {
+    std::lock_guard<std::mutex> lock(g_userAgentMutex);
+    g_userAgent = (userAgent && userAgent[0]) ? userAgent : kDefaultUserAgent;
+}
+
+std::wstring ActiveUserAgent() {
+    std::lock_guard<std::mutex> lock(g_userAgentMutex);
+    return g_userAgent;
+}
+
 Result Execute(const wchar_t* method,
                const char* url,
                const void* reqBody,
@@ -79,7 +93,8 @@ Result Execute(const wchar_t* method,
 
     auto t0 = std::chrono::steady_clock::now();
 
-    HINTERNET hSession = WinHttpOpen(L"AmethystTool/1.0",
+    const std::wstring userAgent = ActiveUserAgent();
+    HINTERNET hSession = WinHttpOpen(userAgent.c_str(),
         WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
         WINHTTP_NO_PROXY_NAME,
         WINHTTP_NO_PROXY_BYPASS,

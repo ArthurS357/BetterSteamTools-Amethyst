@@ -56,6 +56,17 @@ timeout_connect_ms = 5000
 timeout_send_ms    = 10000
 timeout_recv_ms    = 10000
 
+[http]
+# User-Agent sent with every outgoing HTTP request (manifest, stats, remote
+# mirror). Leave unset/empty to use the built-in default, "OpenSteamTool/1.0".
+#
+# manifest.opensteamtool.com sits behind a Cloudflare WAF that allowlists this
+# exact string; any other value gets a JS challenge WinHTTP can never solve,
+# which shows up as "game added to library, download fails with a connection
+# error". Only change this if you point [manifest] url at your own server, or
+# a future upstream change requires a different value.
+# user_agent = "OpenSteamTool/1.0"
+
 [stats]
 # Automatically query https://stats.opensteamtool.com/{appid} for a recommended
 # SteamID when no Lua setStat(appid, "steamid") override exists.

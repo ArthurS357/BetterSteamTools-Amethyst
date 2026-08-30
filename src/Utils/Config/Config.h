@@ -43,6 +43,7 @@ namespace Config {
     std::string GetLogDir();
     std::vector<std::string> GetLuaPaths();
     std::vector<std::string> GetRemoteUrlTemplates();
+    std::string GetHttpUserAgent();
     CloudSettings GetCloudSettings();
     bool GetStatsEnableApi();
     bool GetUpdateEnabled();
@@ -64,6 +65,10 @@ namespace Config {
 
     // [remote] — one or more mirror templates, tried in order. Empty = built-in defaults.
     inline std::vector<std::string> remoteUrlTemplates;
+
+    // [http] — empty = OSTPlatform::Http::kDefaultUserAgent ("OpenSteamTool/1.0",
+    // the value manifest.opensteamtool.com's WAF allowlists).
+    inline std::string httpUserAgent;
 
     // [stats]
     inline bool statsEnableApi = true;

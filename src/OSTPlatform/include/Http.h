@@ -5,6 +5,23 @@
 
 namespace OSTPlatform::Http {
 
+    // The WinHttpOpen User-Agent every Execute() call uses unless overridden via
+    // SetUserAgent(). This exact string is what manifest.opensteamtool.com's
+    // Cloudflare WAF allowlists -- any other value (observed: a plain rename to
+    // "AmethystTool/1.0") gets a JS-challenge response WinHTTP can never solve,
+    // which surfaces as "download fails, HTTP request never succeeds". Header-only
+    // so it stays testable without linking WinHTTP (see http_user_agent_test.cpp).
+    inline constexpr const wchar_t* kDefaultUserAgent = L"OpenSteamTool/1.0";
+
+    // Overrides the User-Agent sent by Execute(). Pass nullptr or an empty string
+    // to restore kDefaultUserAgent. Thread-safe; takes effect on the next Execute()
+    // call. Driven from [http] user_agent in amethysttool.toml (see Config.cpp) so
+    // a future server-side allowlist change doesn't require a rebuild.
+    void SetUserAgent(const wchar_t* userAgent);
+
+    // Returns the User-Agent currently in effect.
+    std::wstring ActiveUserAgent();
+
     struct Result {
         std::string body;
         uint32_t status = 0;

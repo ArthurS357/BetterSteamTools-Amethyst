@@ -1,5 +1,6 @@
 #include "Config.h"
 #include "OSTPlatform/include/Encoding.h"
+#include "OSTPlatform/include/Http.h"
 #include "Utils/Logging/Log.h"
 #include "Utils/SteamMetadata/ManifestClient.h"
 
@@ -18,6 +19,8 @@ namespace {
         std::string logDir;
         std::vector<std::string> luaPaths;
         std::vector<std::string> remoteUrlTemplates;
+        // Empty = OSTPlatform::Http::kDefaultUserAgent ("OpenSteamTool/1.0").
+        std::string httpUserAgent;
         // Privacy/independence defaults (Amethyst fork): both OFF by default.
         //  - statsEnableApi: when true, queries https://stats.opensteamtool.com/{appid}
         //    (upstream telemetry that reveals which apps are launched). Opt-in only.
@@ -68,6 +71,7 @@ namespace {
         logDir                 = snapshot.logDir;
         luaPaths               = snapshot.luaPaths;
         remoteUrlTemplates     = snapshot.remoteUrlTemplates;
+        httpUserAgent          = snapshot.httpUserAgent;
         statsEnableApi         = snapshot.statsEnableApi;
         updateEnabled          = snapshot.updateEnabled;
         injectDlls             = snapshot.injectDlls;
@@ -80,6 +84,15 @@ namespace {
             LOG_WARN("Unknown manifest.url \"{}\", keeping default", provider);
             ManifestClient::SetProvider("opensteamtool");
         }
+    }
+
+    void ApplyHttpUserAgent(const std::string& userAgent) {
+        if (userAgent.empty()) {
+            OSTPlatform::Http::SetUserAgent(nullptr);
+            return;
+        }
+        const std::wstring wide = OSTPlatform::Encoding::Utf8ToWide(userAgent);
+        OSTPlatform::Http::SetUserAgent(wide.c_str());
     }
 
     LoadResult ApplySnapshotLocked(const Snapshot& snapshot) {
@@ -99,6 +112,7 @@ namespace {
         if (!std::filesystem::exists(OSTPlatform::Encoding::Utf8ToPath(configPath))) {
             LOG_INFO("Config file not found, using defaults");
             ApplyManifestProvider(snapshot.manifestProvider);
+            ApplyHttpUserAgent(snapshot.httpUserAgent);
             LoadResult result = ApplySnapshotLocked(snapshot);
             LOG_INFO("Config loaded: manifest.url={} log.level={} lua.paths={} stats.enable_api={} remote.url_templates={}",
                      ManifestClient::ActiveProviderName(),
@@ -159,6 +173,13 @@ namespace {
                     }
                 } else if (auto val = (*remote)["url_template"].value<std::string>()) {
                     snapshot.remoteUrlTemplates.push_back(*val);
+                }
+            }
+
+            // [http]
+            if (auto http = tbl["http"].as_table()) {
+                if (auto val = (*http)["user_agent"].value<std::string>()) {
+                    snapshot.httpUserAgent = *val;
                 }
             }
 
@@ -227,6 +248,7 @@ namespace {
             }
 
             ApplyManifestProvider(snapshot.manifestProvider);
+            ApplyHttpUserAgent(snapshot.httpUserAgent);
             LoadResult result = ApplySnapshotLocked(snapshot);
             LOG_INFO("Config loaded: manifest.url={} log.level={} lua.paths={} stats.enable_api={} remote.url_templates={}",
                      ManifestClient::ActiveProviderName(),
@@ -248,6 +270,7 @@ namespace {
         }
         if (shouldApplyDefault) {
             ApplyManifestProvider(snapshot.manifestProvider);
+            ApplyHttpUserAgent(snapshot.httpUserAgent);
             std::lock_guard lock(g_mutex);
             const bool luaChanged = luaPaths != snapshot.luaPaths;
             ApplySnapshot(snapshot);
@@ -285,6 +308,11 @@ namespace {
     std::vector<std::string> GetRemoteUrlTemplates() {
         std::lock_guard lock(g_mutex);
         return remoteUrlTemplates;
+    }
+
+    std::string GetHttpUserAgent() {
+        std::lock_guard lock(g_mutex);
+        return httpUserAgent;
     }
 
     bool GetStatsEnableApi() {
