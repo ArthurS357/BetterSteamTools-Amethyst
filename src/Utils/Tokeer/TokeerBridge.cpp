@@ -1,6 +1,7 @@
 #include "TokeerBridge.h"
 
 #include "OSTPlatform/include/Dialog.h"
+#include "OSTPlatform/include/Encoding.h"
 #include "OSTPlatform/include/Http.h"
 #include "OSTPlatform/include/Numbers.h"
 #include "OSTPlatform/include/SteamCredentialStore.h"
@@ -135,22 +136,31 @@ void RegisterUriScheme(const std::string& dllPath) {
     const std::string command =
         "rundll32.exe \"" + dllPath + "\",TokeerUri \"%1\"";
 
-    auto writeKey = [](const char* sub, const char* valueName, const std::string& value) -> bool {
+    // dllPath (and therefore command) is UTF-8 (built from SteamInstallPath in
+    // dllmain.cpp). RegCreateKeyExA/RegSetValueExA decode narrow strings via the
+    // ANSI codepage, not UTF-8 -- a non-ASCII Steam install path would register
+    // the wrong rundll32 target, so opening an amethysttool:// link would silently
+    // fail to find this DLL. Use the W (wide) Registry APIs with an explicit
+    // Utf8ToWide decode instead; only reachable when OST_TOKEER_URL is set at
+    // build time, so this has no effect on the default build.
+    auto writeKey = [](const wchar_t* sub, const wchar_t* valueName, const std::wstring& value) -> bool {
         HKEY key{};
-        if (RegCreateKeyExA(HKEY_CURRENT_USER, sub, 0, nullptr, 0,
+        if (RegCreateKeyExW(HKEY_CURRENT_USER, sub, 0, nullptr, 0,
                             KEY_SET_VALUE, nullptr, &key, nullptr) != ERROR_SUCCESS)
             return false;
-        const LSTATUS s = RegSetValueExA(key, valueName, 0, REG_SZ,
+        const LSTATUS s = RegSetValueExW(key, valueName, 0, REG_SZ,
                                          reinterpret_cast<const BYTE*>(value.c_str()),
-                                         static_cast<DWORD>(value.size() + 1));
+                                         static_cast<DWORD>((value.size() + 1) * sizeof(wchar_t)));
         RegCloseKey(key);
         return s == ERROR_SUCCESS;
     };
 
+    const std::wstring commandW = OSTPlatform::Encoding::Utf8ToWide(command);
+
     const bool ok =
-        writeKey("Software\\Classes\\amethysttool", nullptr, "URL:AmethystTool") &&
-        writeKey("Software\\Classes\\amethysttool", "URL Protocol", "") &&
-        writeKey("Software\\Classes\\amethysttool\\shell\\open\\command", nullptr, command);
+        writeKey(L"Software\\Classes\\amethysttool", nullptr, L"URL:AmethystTool") &&
+        writeKey(L"Software\\Classes\\amethysttool", L"URL Protocol", L"") &&
+        writeKey(L"Software\\Classes\\amethysttool\\shell\\open\\command", nullptr, commandW);
 
     if (ok) LOG_INFO("TokeerBridge: registered amethysttool:// scheme -> {}", command);
     else    LOG_WARN("TokeerBridge: failed to register amethysttool:// scheme");
