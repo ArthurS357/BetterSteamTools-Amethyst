@@ -1,5 +1,6 @@
 #include "Pipe/Features/Injection/Injection.h"
 
+#include "OSTPlatform/include/Encoding.h"
 #include "OSTPlatform/include/Process.h"
 #include "OSTPlatform/include/RemoteProcess.h"
 #include "Utils/Config/Config.h"
@@ -68,7 +69,12 @@ void Apply(const PipeContext& ctx) {
         if (!Matches(dll, ctx, cmd)) continue;
         if (!ClaimInjection({ctx.process, dll.path})) continue;
 
-        const std::filesystem::path path(dll.path);
+        // dll.path is UTF-8 (Config.cpp builds it via PathToUtf8); decode via
+        // Utf8ToPath rather than the ANSI-codepage path(std::string) constructor,
+        // or a non-ASCII configured DLL path silently resolves to the wrong
+        // (usually nonexistent) file and injection fails closed instead of
+        // finding the file the user actually configured.
+        const std::filesystem::path path = OSTPlatform::Encoding::Utf8ToPath(dll.path);
         const auto status = OSTPlatform::RemoteProcess::InjectLibrary(ctx.process.pid, path);
         if (status == OSTPlatform::RemoteProcess::InjectStatus::Ok) {
             LOG_INJECT_INFO("injected pid={} appid={} dll=\"{}\"",

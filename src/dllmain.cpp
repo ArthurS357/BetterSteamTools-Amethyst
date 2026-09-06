@@ -12,6 +12,7 @@
 #include "Utils/Update/AppUpdater.h"
 #include "OSTPlatform/include/Dialog.h"
 #include "OSTPlatform/include/DynamicLibrary.h"
+#include "OSTPlatform/include/Encoding.h"
 #include "OSTPlatform/include/Thread.h"
 
 #include <cwchar>
@@ -32,15 +33,20 @@ bool InitializeSteamComponents()
     sprintf_s(LuaDir,          kRuntimePathCapacity, "%s\\config\\stplug-in",  SteamInstallPath);
     sprintf_s(ConfigPath,      kRuntimePathCapacity, "%s\\amethysttool.toml", SteamInstallPath);
     
-    client_hModule = OSTPlatform::DynamicLibrary::Load(SteamclientPath);
+    // SteamclientPath/SteamUIPath are UTF-8 (built from GetCurrentDirectoryPath()
+    // above); Load() takes a std::filesystem::path, so decode via Utf8ToPath rather
+    // than the ANSI-codepage path(std::string) constructor its implicit conversion
+    // would otherwise use -- a non-ASCII Steam install path would otherwise fail to
+    // load steamclient64.dll/steamui.dll at all.
+    client_hModule = OSTPlatform::DynamicLibrary::Load(OSTPlatform::Encoding::Utf8ToPath(SteamclientPath));
     if (!client_hModule) {
         LOG_ERROR("Load steamclient64.dll failed: {} (err={})",
                   SteamclientPath, OSTPlatform::DynamicLibrary::GetLastErrorCode());
         return false;
     }
     LOG_INFO("Loaded steamclient64.dll from {}", SteamclientPath);
-    
-    ui_hModule = OSTPlatform::DynamicLibrary::Load(SteamUIPath);
+
+    ui_hModule = OSTPlatform::DynamicLibrary::Load(OSTPlatform::Encoding::Utf8ToPath(SteamUIPath));
     if(!ui_hModule) {
         LOG_ERROR("Load failed for steamui.dll: err={}", OSTPlatform::DynamicLibrary::GetLastErrorCode());
         return false;
@@ -66,7 +72,11 @@ static uint32_t InitThread(OSTPlatform::DynamicLibrary::ModuleHandle selfModule)
     {
         const std::string legacyConfig =
             std::string(SteamInstallPath) + "\\opensteamtool.toml";
-        if (Config::MigrateLegacyConfig(ConfigPath, legacyConfig))
+        // Both are UTF-8 (ConfigPath per InitializeSteamComponents above; legacyConfig
+        // derived the same way from SteamInstallPath) -- decode via Utf8ToPath rather
+        // than MigrateLegacyConfig's implicit ANSI-codepage path(std::string) conversion.
+        if (Config::MigrateLegacyConfig(OSTPlatform::Encoding::Utf8ToPath(ConfigPath),
+                                         OSTPlatform::Encoding::Utf8ToPath(legacyConfig)))
             LOG_INFO("Migrated config from opensteamtool.toml to amethysttool.toml");
     }
 

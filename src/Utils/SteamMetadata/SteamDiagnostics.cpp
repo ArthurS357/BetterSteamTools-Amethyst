@@ -2,6 +2,7 @@
 #include "OpenSteamToolBuildInfo.h"
 #include "OSTPlatform/include/Dialog.h"
 #include "OSTPlatform/include/DynamicLibrary.h"
+#include "OSTPlatform/include/Encoding.h"
 #include "OSTPlatform/include/Hash.h"
 #include "Utils/Logging/Log.h"
 
@@ -47,7 +48,10 @@ namespace {
 
     static std::string HashOrUnavailable(const std::string& path)
     {
-        std::string sha256 = OSTPlatform::Hash::Sha256OfFile(path);
+        // path is UTF-8 (steamclientPath/steamUIPath, sourced from dllmain.cpp);
+        // decode via Utf8ToPath rather than Sha256OfFile's implicit ANSI-codepage
+        // path(std::string) conversion.
+        std::string sha256 = OSTPlatform::Hash::Sha256OfFile(OSTPlatform::Encoding::Utf8ToPath(path));
         return sha256.empty() ? "(unavailable)" : std::move(sha256);
     }
 
@@ -92,7 +96,9 @@ std::string Sha256Of(const std::string& path)
             ? std::string{}
             : g_snapshot.steamUISha256;
 
-    return OSTPlatform::Hash::Sha256OfFile(path);
+    // path is UTF-8 here too (any caller passes the same steamclient/steamUI-style
+    // paths); see HashOrUnavailable above for why Utf8ToPath is needed.
+    return OSTPlatform::Hash::Sha256OfFile(OSTPlatform::Encoding::Utf8ToPath(path));
 }
 
 void ShowWarning(std::string title, std::string message)

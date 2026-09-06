@@ -51,7 +51,7 @@ AmethystTool is a privacy-hardened fork of OpenSteamTools. Behavioural differenc
 - Unlock an unlimited number of unowned games.
 - Unlock all DLCs for unowned games.
 - Support auto load depot decryption keys from Lua config.
-- Support auto manifest download via `opensteamtool` / `steamrun` / `wudrm` upstream APIs (default is `opensteamtool`), or a custom Lua endpoint (see [Manifest via Lua](#manifest-via-lua)).
+- Support auto manifest download via `opensteamtool` / `steamrun` / `wudrm` upstream APIs (default is `opensteamtool`), a custom Lua endpoint (see [Manifest via Lua](#manifest-via-lua)), or a custom URL template (see [Manifest via a custom endpoint](#manifest-via-a-custom-endpoint)).
 - Support downloading protected games or DLCs that require an access token.
 - Support binding manifest to prevent specific games from being updated.
 
@@ -157,6 +157,9 @@ level = "info"
 [manifest]
 # Upstream API for depot manifest request codes.  Options: "opensteamtool", "steamrun", "wudrm"
 url = "opensteamtool"
+# Optional: bypass the providers above entirely with your own endpoint.
+# Must contain "{gid}". See "Manifest via a custom endpoint" below.
+# url_template = "https://your-host/manifest/{gid}"
 
 # HTTP timeouts for manifest requests (milliseconds)
 timeout_resolve_ms = 5000
@@ -225,6 +228,17 @@ The C++ runtime provides two Lua helpers:
 | `http_post` | `http_post(url, body [, headers])` | `body, status_code` |
 
 `headers` is an optional table: `{["Key"]="Value", ...}`.
+
+### Manifest via a custom endpoint
+
+If you don't need Lua's per-app logic, `[manifest] url_template` in `amethysttool.toml` points manifest requests at your own server instead of the 3 built-in providers:
+
+```toml
+[manifest]
+url_template = "https://your-host/manifest/{gid}"
+```
+
+Must contain the literal `{gid}` placeholder; a value missing it is rejected (the `url` provider stays active). The response must be the plain decimal request code in the body — same wire format as the `opensteamtool`/`wudrm` providers, since a custom endpoint can't reuse the `steamrun` JSON parser. Priority: `manifest.lua` functions above > `url_template` > `url`. Empty (the default) leaves `url` in effect — no configuration is required to keep today's behavior.
 
 ### Steam version compatibility
 

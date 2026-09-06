@@ -46,6 +46,18 @@ level = "debug"
 # end
 url = "opensteamtool"
 
+# Independence override: point manifest requests at your own server instead of
+# any of the 3 built-in providers above. Empty (the default) leaves `url`
+# in effect. Must contain the literal placeholder "{gid}"; a value missing it
+# is rejected (logged, `url`'s provider stays active). Priority order is
+# manifest.lua > url_template > url -- this is checked only after manifest.lua
+# declines to answer (fetch_manifest_code / fetch_manifest_code_ex above).
+#
+# The response must be the plain decimal request code in the body, same wire
+# format as "opensteamtool"/"wudrm" -- a custom endpoint cannot reuse the
+# "steamrun" JSON parser.
+# url_template = "https://your-host/manifest/{gid}"
+
 # HTTP timeouts for manifest requests (milliseconds).
 # timeout_resolve_ms  — DNS resolution        (default: 5000)
 # timeout_connect_ms  — TCP handshake          (default: 5000)

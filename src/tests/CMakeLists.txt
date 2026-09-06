@@ -20,14 +20,16 @@
 # Logging is diagnostic only and does not affect the parse/encode/hash results
 # these tests assert, so behaviour under test is identical.
 #
-# Config::MigrateLegacyConfig, AppTicket::ExtractSteamIdFromTicketBytes, and the
-# TokeerBridge hex/JSON/URI helpers are the exceptions: each was extracted into
-# its own dependency-light TU (ConfigMigration.cpp, TicketParsing.cpp,
-# TokeerParsing.cpp) specifically so it compiles here without pulling in Lua,
-# the hook engine, WinHTTP, or MessageBox. The rest of AppTicket/TokeerBridge
-# (credential-store I/O, HTTP requests, dialogs) and Config::Load itself remain
-# TU-coupled and are not unit-testable without further extraction — tracked as
-# pending in the report, not forced here.
+# Config::MigrateLegacyConfig, AppTicket::ExtractSteamIdFromTicketBytes, the
+# TokeerBridge hex/JSON/URI helpers, and the online-fix AppID-flip decision are
+# the exceptions: each was extracted into its own dependency-light TU
+# (ConfigMigration.cpp, TicketParsing.cpp, TokeerParsing.cpp, OnlineFixLogic.cpp)
+# specifically so it compiles here without pulling in Lua, the hook engine,
+# WinHTTP, or MessageBox. The rest of AppTicket/TokeerBridge (credential-store
+# I/O, HTTP requests, dialogs), Config::Load itself, and the rest of
+# Hooks_Misc.cpp (VEH capture, Detours) remain TU-coupled and are not
+# unit-testable without further extraction — tracked as pending in the report,
+# not forced here.
 #
 # http_user_agent_test.cpp only includes OSTPlatform/include/Http.h (not
 # Http.cpp): kDefaultUserAgent is a header-only constexpr precisely so this
@@ -49,6 +51,7 @@ add_executable(AmethystToolTests
     ticket_parsing_test.cpp
     tokeer_parsing_test.cpp
     http_user_agent_test.cpp
+    online_fix_logic_test.cpp
 
     # Units under test, compiled directly (no OSTPlatform lib link) — see header.
     "${_ostp}/Numbers.cpp"
@@ -61,6 +64,9 @@ add_executable(AmethystToolTests
     # so it compiles here without Hooks_Decryption/LuaConfig/Http/Dialog.
     "${CMAKE_CURRENT_SOURCE_DIR}/../Utils/Tickets/TicketParsing.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/../Utils/Tokeer/TokeerParsing.cpp"
+    # Online-fix AppID-flip decision split out of Hooks_Misc.cpp so it compiles
+    # here without HookMacros.h's Detour/PatternLoader dependency.
+    "${CMAKE_CURRENT_SOURCE_DIR}/../Hook/OnlineFixLogic.cpp"
 )
 
 # src/ root for production-style header spellings ("Utils/Support/FnvHash.h",

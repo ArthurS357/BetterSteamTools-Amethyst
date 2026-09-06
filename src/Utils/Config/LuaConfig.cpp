@@ -756,15 +756,20 @@ namespace LuaConfig{
         if (!std::filesystem::exists(dirPath, ec) || !std::filesystem::is_directory(dirPath, ec))
             return files;
 
-        // entry.path() here is native (wide) from directory_iterator, not derived from
-        // `directory` -- narrowing it via .string() and later re-widening in ParseFile's
-        // path(filePath) is a self-consistent ANSI-codepage round trip, not the
-        // UTF-8-fed-as-ANSI bug above, so it's left as-is.
+        // entry.path() here is native (wide) from directory_iterator. Narrow it via
+        // PathToUtf8 (not .string(), which is ANSI-codepage) so this list is on the
+        // same footing as LuaFileWatcher::ToFileChanges, which builds its paths as
+        // UTF-8 (dir + Encoding::WideToUtf8(relativePath) from ReadDirectoryChangesW).
+        // Both producers feeding ParseFile/UnloadFile must agree on encoding: besides
+        // the open() call inside ParseFile, filePath is also used as a map key there,
+        // so a startup scan (ANSI) and a later hot-reload (UTF-8) of the same
+        // non-ASCII path used to decode to different byte strings -- silently
+        // duplicating the entry instead of replacing it.
         for (const auto& entry : std::filesystem::directory_iterator(dirPath, ec)) {
             if (ec) break;
             if (!entry.is_regular_file()) continue;
             if (entry.path().extension() != ".lua") continue;
-            files.push_back(entry.path().string());
+            files.push_back(OSTPlatform::Encoding::PathToUtf8(entry.path()));
         }
         return files;
     }
@@ -777,7 +782,10 @@ namespace LuaConfig{
         UnloadFile(filePath);
         g_currentFile = filePath;
 
-        std::filesystem::path path(filePath);
+        // filePath is UTF-8 from both callers (CollectLuaFiles' startup scan and
+        // LuaFileWatcher's hot-reload -- see the comment there); decode via
+        // Utf8ToPath rather than the ANSI-codepage path(std::string) constructor.
+        const std::filesystem::path path = OSTPlatform::Encoding::Utf8ToPath(filePath);
         std::ifstream file(path);
         if (!file) {
             LOG_WARN("ParseFile: failed to open {}", path.filename().string());

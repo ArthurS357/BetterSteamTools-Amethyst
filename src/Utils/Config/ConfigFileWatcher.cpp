@@ -5,6 +5,7 @@
 #include "Utils/Config/ConfigFileWatcher.h"
 #include "Utils/Logging/Log.h"
 #include "OSTPlatform/include/DirectoryWatch.h"
+#include "OSTPlatform/include/Encoding.h"
 
 #include <atomic>
 #include <cctype>
@@ -77,13 +78,23 @@ void ReloadConfig() {
 }
 
 void WatcherThread() {
-    const std::filesystem::path configPath(g_configPath);
+    // g_configPath is UTF-8 (see Start(), sourced from dllmain.cpp's ConfigPath);
+    // decode via Utf8ToPath rather than the ANSI-codepage path(std::string)
+    // constructor -- a non-ASCII Steam install path would otherwise resolve to
+    // the wrong watch directory.
+    const std::filesystem::path configPath = OSTPlatform::Encoding::Utf8ToPath(g_configPath);
     const std::filesystem::path dirPath = configPath.parent_path();
+    // "amethysttool.toml" is a pure-ASCII literal, so narrowing it via .string() is
+    // safe regardless of codepage, unlike dirPath below.
     const std::string targetFileName = configPath.filename().string();
 
+    // watch.Open expects UTF-8 (it converts via Encoding::Utf8ToWide internally);
+    // PathToUtf8, not .string() (ANSI codepage), keeps this consistent with the
+    // decode above.
+    const std::string dirPathUtf8 = OSTPlatform::Encoding::PathToUtf8(dirPath);
     OSTPlatform::DirectoryWatch::Watch watch;
-    if (!watch.Open(dirPath.string(), 4096)) {
-        LOG_WARN("Failed to open config watch directory: {}", dirPath.string());
+    if (!watch.Open(dirPathUtf8, 4096)) {
+        LOG_WARN("Failed to open config watch directory: {}", dirPathUtf8);
         return;
     }
     if (!watch.IssueRead()) {

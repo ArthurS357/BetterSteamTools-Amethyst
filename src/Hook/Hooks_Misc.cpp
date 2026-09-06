@@ -1,5 +1,6 @@
 #include "Hooks_Misc.h"
 #include "HookMacros.h"
+#include "Hook/OnlineFixLogic.h"
 #include "Utils/HookSupport/VehCommon.h"
 #include "dllmain.h"
 
@@ -37,9 +38,7 @@ namespace {
         {
             g_OnlineFixRealAppId = appId;
             g_NetworkingSocketsActive = false;
-            // Opt out of the P2P appid flip for this game. Launch options are
-            // already per-game in Steam, so this needs no appid list of its own.
-            g_SuppressAppIdFlip = strstr(cmdLine, "-realappid") != nullptr;
+            g_SuppressAppIdFlip = OnlineFixLogic::ShouldSuppressAppIdFlip(cmdLine);
             pGameID->SetAppID(kOnlineFixAppId);
             LOG_MISC_INFO("SpawnProcess: appid {} -> {}, realappid={}, cmd=\"{}\"",
                           appId, kOnlineFixAppId, g_SuppressAppIdFlip, cmdLine);
@@ -164,17 +163,10 @@ namespace Hooks_Misc {
     }
 
     bool ShouldReportOnlineFixAppId() {
-        // The flip exists so a P2P socket's appid matches the 480 session cert,
-        // which some titles need (#146). It is blunt though: from the moment it
-        // trips, every GetAppID answer is the fake appid for the rest of the
-        // process's life. Games that ask Steam for their own appid during later
-        // startup then get 480 and misbehave — Bodycam (2406770) black-screens
-        // straight after login this way.
-        //
-        // Both behaviours are needed by different games, and the call itself
-        // gives no way to tell them apart, so -realappid opts out per launch.
-        if (g_SuppressAppIdFlip) return false;
-        return g_OnlineFixRealAppId != 0 && g_NetworkingSocketsActive;
+        // Decision logic lives in OnlineFixLogic (testable pure function of the
+        // 3 globals below) -- see its header for the Bodycam/#146 rationale.
+        return OnlineFixLogic::ShouldReportOnlineFixAppId(
+            g_SuppressAppIdFlip, g_OnlineFixRealAppId != 0, g_NetworkingSocketsActive);
     }
 
     bool EnsureBufferCapacity(CUtlBuffer* pWrite, uint32 newCapacity,bool updatePut)

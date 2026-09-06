@@ -14,6 +14,8 @@ namespace {
 
     struct Snapshot {
         std::string manifestProvider = "opensteamtool";
+        // Empty = use manifestProvider's built-in URL. See ManifestClient::SetUrlTemplateOverride.
+        std::string manifestUrlTemplate;
         ManifestTimeouts manifestTimeouts;
         LogLevel logLevel = LogLevel::Debug;
         std::string logDir;
@@ -112,6 +114,7 @@ namespace {
         if (!std::filesystem::exists(OSTPlatform::Encoding::Utf8ToPath(configPath))) {
             LOG_INFO("Config file not found, using defaults");
             ApplyManifestProvider(snapshot.manifestProvider);
+            ManifestClient::SetUrlTemplateOverride(snapshot.manifestUrlTemplate);
             ApplyHttpUserAgent(snapshot.httpUserAgent);
             LoadResult result = ApplySnapshotLocked(snapshot);
             LOG_INFO("Config loaded: manifest.url={} log.level={} lua.paths={} stats.enable_api={} remote.url_templates={}",
@@ -130,6 +133,13 @@ namespace {
             if (auto manifest = tbl["manifest"].as_table()) {
                 if (auto val = (*manifest)["url"].value<std::string>()) {
                     snapshot.manifestProvider = *val;
+                }
+                // Independent of `url` above: when set (and containing "{gid}"), this
+                // overrides the built-in provider table entirely. Empty (the default)
+                // leaves the `url`-selected provider in effect -- see
+                // ManifestClient::SetUrlTemplateOverride.
+                if (auto val = (*manifest)["url_template"].value<std::string>()) {
+                    snapshot.manifestUrlTemplate = *val;
                 }
                 if (auto val = (*manifest)["timeout_resolve_ms"].value<int64_t>())
                     snapshot.manifestTimeouts.resolve = static_cast<uint32_t>(*val);
@@ -219,17 +229,13 @@ namespace {
                     }
 
                     InjectDll dll;
-                    // dll.path stays ANSI-codepage .string(), not PathToUtf8: it crosses
-                    // into Pipe/Features/Injection/Injection.cpp (out of scope here --
-                    // circumvention/injection logic), which reconstructs a
-                    // std::filesystem::path from it with the default (ANSI) constructor.
-                    // Keeping both ends on the same codepage is deliberate; full is now
-                    // decoded correctly above, so this round-trip is correct for any
-                    // path representable in the host's ANSI codepage (the previous
-                    // double ANSI-decode of UTF-8 bytes was wrong for any non-ASCII
-                    // character). A locale-independent fix would require touching
-                    // Injection.cpp too.
-                    dll.path = full.string();
+                    // dll.path is UTF-8 (PathToUtf8, not the ANSI-codepage .string()):
+                    // it crosses into Pipe/Features/Injection/Injection.cpp, which decodes
+                    // it back via Utf8ToPath before handing it to RemoteProcess::InjectLibrary
+                    // (WriteProcessMemory + remote LoadLibraryW). Both ends must agree on
+                    // encoding or injection silently targets the wrong (usually nonexistent)
+                    // path; see the matching comment in Injection.cpp.
+                    dll.path = OSTPlatform::Encoding::PathToUtf8(full);
                     if (auto val = (*t)["when_cmdline"].value<std::string>()) dll.whenCmdline = *val;
                     if (auto val = (*t)["all_games"].value<bool>())           dll.allGames   = *val;
                     if (auto ids = (*t)["when_appids"].as_array())
@@ -248,6 +254,7 @@ namespace {
             }
 
             ApplyManifestProvider(snapshot.manifestProvider);
+            ManifestClient::SetUrlTemplateOverride(snapshot.manifestUrlTemplate);
             ApplyHttpUserAgent(snapshot.httpUserAgent);
             LoadResult result = ApplySnapshotLocked(snapshot);
             LOG_INFO("Config loaded: manifest.url={} log.level={} lua.paths={} stats.enable_api={} remote.url_templates={}",
@@ -270,6 +277,7 @@ namespace {
         }
         if (shouldApplyDefault) {
             ApplyManifestProvider(snapshot.manifestProvider);
+            ManifestClient::SetUrlTemplateOverride(snapshot.manifestUrlTemplate);
             ApplyHttpUserAgent(snapshot.httpUserAgent);
             std::lock_guard lock(g_mutex);
             const bool luaChanged = luaPaths != snapshot.luaPaths;
