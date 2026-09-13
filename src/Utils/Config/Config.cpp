@@ -1,6 +1,7 @@
 #include "Config.h"
 #include "OSTPlatform/include/Encoding.h"
 #include "OSTPlatform/include/Http.h"
+#include "Utils/Config/DonateConfigLogic.h"
 #include "Utils/Logging/Log.h"
 #include "Utils/SteamMetadata/ManifestClient.h"
 
@@ -36,6 +37,9 @@ namespace {
         CloudSettings cloud;
         // Empty = ManifestCache disabled entirely (no request ever made).
         std::string cacheUrl;
+        // enabled=false (struct default) = ManifestDonor disabled entirely:
+        // no wanted-list GET, no passive capture, no submit POST.
+        DonateSettings donate;
     };
 
     std::mutex g_mutex;
@@ -82,6 +86,7 @@ namespace {
         cloudEnabled           = snapshot.cloud.enabled;
         cloudLibrary           = snapshot.cloud.library;
         cacheUrl               = snapshot.cacheUrl;
+        donate                 = snapshot.donate;
     }
 
     void ApplyManifestProvider(const std::string& provider) {
@@ -262,6 +267,18 @@ namespace {
                     snapshot.cacheUrl = *val;
             }
 
+            // [donate] — enabled=false (struct default) leaves ManifestDonor
+            // fully off: absence of the section, or absence of "enabled"
+            // within it, changes nothing. Parsing itself lives in
+            // DonateConfigLogic (pure, unit-tested) so this stays a thin
+            // apply-and-log wrapper. Local name "donateSection" (not "donate")
+            // to avoid hiding the Config::donate global via ADL/C4459.
+            if (auto donateSection = tbl["donate"].as_table()) {
+                for ([[maybe_unused]] const auto& w : DonateConfigLogic::Apply(*donateSection, snapshot.donate))
+                    LOG_WARN("[donate] {} = {} out of range [{}, {}], keeping {}",
+                             w.key, w.value, w.lo, w.hi, w.kept);
+            }
+
             ApplyManifestProvider(snapshot.manifestProvider);
             ManifestClient::SetUrlTemplateOverride(snapshot.manifestUrlTemplate);
             ApplyHttpUserAgent(snapshot.httpUserAgent);
@@ -353,6 +370,11 @@ namespace {
     CacheSettings GetCacheSettings() {
         std::lock_guard lock(g_mutex);
         return {cacheUrl};
+    }
+
+    DonateSettings GetDonateSettings() {
+        std::lock_guard lock(g_mutex);
+        return donate;
     }
 
 }

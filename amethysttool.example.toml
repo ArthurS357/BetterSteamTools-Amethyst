@@ -85,6 +85,50 @@ timeout_recv_ms    = 10000
 # when a depot's manifest is already cached locally.
 # url = "https://manifest.luastools.xyz"
 
+[donate]
+# Contribute manifest request codes for depots THIS account owns, to fill
+# gaps the backend's own sessions can't reach (it only sees what its own
+# signed-in accounts can access; anything else 403s until someone who owns
+# it donates one). This is the ONLY feature in AmethystTool that sends data
+# to a third party -- everything else in this file only downloads.
+#
+# OFF BY DEFAULT ("enabled = false" or the section absent entirely). Unlike
+# [cache] above (which is inert until you set a url), this one needs the
+# explicit "enabled = true" below even if you also set a custom url --
+# opt-in is deliberate, not just "unconfigured".
+#
+# What leaves the machine when enabled = true:
+#   - A periodic GET for the (large, ~5 MB) list of manifests the backend
+#     is missing -- no account/library data sent, just receiving the list.
+#   - For each entry your account happens to own: a HEAD probe (checks if
+#     another donor already supplied it -- also receive-only), then, only
+#     on a real gap, ONE genuine "give me a manifest request code" call to
+#     Steam (the exact same call Steam already makes when YOU download that
+#     depot) followed by a POST of {depot_id, manifest_gid, the resulting
+#     short-lived code}. The code rotates within minutes and is useless to
+#     anyone once it expires -- nothing durable about your library is kept.
+#   - Depots you do not own are never mentioned to the server; only matches
+#     are ever reported (silence for the rest of your library).
+#   - Separately: every genuine manifest code Steam hands YOUR client during
+#     your own normal downloads is opportunistically submitted the same way
+#     (no extra Steam call -- it was already spent on a real download). This
+#     also stops entirely when enabled = false.
+enabled = false
+# Base URL for the donation backend. Empty (default) = the built-in
+# https://manifest.luastools.xyz.
+# url = "https://manifest.luastools.xyz"
+# How often to run a donation cycle (seconds). Range: 30-86400.
+# interval_secs = 30
+# Cap on Steam calls per cycle (protects against a huge wanted list). Range: 1-500.
+# max_mints_per_cycle = 25
+# Minimum spacing between consecutive Steam calls within a cycle (ms). Range: 0-60000.
+# min_mint_interval_ms = 2000
+# Cap on Steam calls for the whole process lifetime. 0 = unlimited. Range: 0-100000.
+# max_mints_per_session = 0
+# How often to re-pull the wanted list (seconds); minting still runs every
+# interval_secs in between, reusing the cached list. Range: 30-86400.
+# wanted_refresh_secs = 300
+
 [http]
 # User-Agent sent with every outgoing HTTP request (manifest, stats, remote
 # mirror). Leave unset/empty to use the built-in default, "OpenSteamTool/1.0".

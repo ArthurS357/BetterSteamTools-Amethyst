@@ -260,6 +260,28 @@ url = "https://manifest.luastools.xyz"
 
 A 404 (not archived) is remembered locally for a short window so Steam's periodic retries don't repeatedly hit the same miss; a network error or server error is never cached and is retried on the next attempt, and never blocks or delays the game's own download either way.
 
+### Manifest donation (opt-in)
+
+`[cache]` above only *downloads* — this is the one feature in AmethystTool that *sends* anything to a third party, so it needs its own explicit opt-in rather than piggybacking on a URL being set.
+
+The manifest archive that `[cache]` reads from is filled by donors: accounts that already own a depot mint a genuine, short-lived request code for it and hand it to the backend, so everyone else's `[cache]` lookup can be a plain download instead of a Steam call. `[donate]` in `amethysttool.toml` is how *this* installation can be one of those donors.
+
+```toml
+[donate]
+enabled = true
+```
+
+**Off by default**, and unlike `[cache]`, setting a `url` alone does not turn it on — `enabled = true` is required explicitly. With the default `enabled = false` (or no `[donate]` section at all), AmethystTool makes zero requests related to donation: no periodic wanted-list fetch, no HEAD probes, no submit, and the passive-capture path described below records nothing.
+
+**What leaves the machine when enabled:**
+
+- A periodic GET of the (large) list of manifests the backend is currently missing. This is a download — nothing about this installation is sent to get it.
+- For every entry in that list this account happens to own: a HEAD probe (also receive-only — checks whether another donor beat you to it) and, only on a genuine gap, one real "give me a manifest request code" call to Steam — the same call Steam already makes for you when you download that depot yourself — followed by a POST of `{depot_id, manifest_gid, the resulting code}`. Depots this account does *not* own are never mentioned to the server; only matches are ever reported, so the rest of the library stays private.
+- Separately, every genuine request code Steam hands this client during a normal download of your own is opportunistically submitted the same way — no extra Steam call, since the code was already spent on a real download. This passive path is gated on `[donate] enabled` exactly like the active mint cycle: `false` means nothing is ever recorded or sent.
+- The code itself is bound to `(depot, manifest)` and rotates within minutes of being minted; it is posted immediately and never stored, so there is nothing durable to leak even if the submission were intercepted.
+
+`interval_secs`, `max_mints_per_cycle`, `min_mint_interval_ms`, `max_mints_per_session`, and `wanted_refresh_secs` all cap how hard this calls Steam as the signed-in user — see `amethysttool.example.toml` for ranges and defaults. `url` overrides the donation backend independently of `[cache] url`; the two are unrelated endpoints (submit vs. archive lookup) and either can be pointed at a different host without affecting the other.
+
 ### Steam version compatibility
 
 AmethystTool no longer ships byte-pattern signatures inside the DLL. Instead, on each launch it computes the SHA-256 of `steamclient64.dll` and `steamui.dll` on disk and looks up a matching pattern file from the upstream tracker at [`OpenSteam001/steam-monitor`](https://github.com/OpenSteam001/steam-monitor) (`pattern` branch).

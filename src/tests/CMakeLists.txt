@@ -53,6 +53,12 @@
 # WinHTTP/Detours surface this file avoids. The archive fetch itself is
 # injected (ManifestCacheLogic::Fetcher), so no network call is possible from
 # this test binary.
+#
+# DonateConfigLogic.cpp (the [donate] TOML-parsing/clamping logic behind
+# Config::Load, split out of Config.cpp the same way ConfigMigration.cpp was)
+# needs only <toml++/toml.hpp> (header-only, linked via tomlplusplus::tomlplusplus
+# below) and Config.h -- no Lua/LuaConfig, WinHTTP, or spdlog, so it compiles
+# here without the rest of Utils/Config.
 # ---------------------------------------------------------------------------
 
 include(GTestDep)   # our recipe: GTest::gtest_main / GTest::gmock (/MT)
@@ -73,6 +79,7 @@ add_executable(AmethystToolTests
     online_fix_logic_test.cpp
     license_list_logic_test.cpp
     manifest_cache_logic_test.cpp
+    donate_config_logic_test.cpp
 
     # Units under test, compiled directly (no OSTPlatform lib link) — see header.
     "${_ostp}/Numbers.cpp"
@@ -95,6 +102,9 @@ add_executable(AmethystToolTests
     # ManifestCache's file/negative-cache/validation logic, split out so it
     # compiles here without OSTPlatform::Http/DynamicLibrary or Config.
     "${CMAKE_CURRENT_SOURCE_DIR}/../Utils/SteamMetadata/ManifestCacheLogic.cpp"
+    # [donate] TOML parsing/clamping, split out of Config.cpp so it compiles
+    # here without Lua/LuaConfig, WinHTTP, or spdlog (see header comment above).
+    "${CMAKE_CURRENT_SOURCE_DIR}/../Utils/Config/DonateConfigLogic.cpp"
 )
 
 # src/ root for production-style header spellings ("Utils/Support/FnvHash.h",
@@ -123,6 +133,7 @@ target_link_libraries(AmethystToolTests PRIVATE
     GTest::gtest_main
     GTest::gmock
     Bcrypt
+    tomlplusplus::tomlplusplus
     $<$<CONFIG:Debug>:libprotobuf>
     $<$<CONFIG:Release>:libprotobuf-lite>
 )

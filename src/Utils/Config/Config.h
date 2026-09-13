@@ -37,6 +37,22 @@ namespace Config {
         std::string url;
     };
 
+    // [donate] — contribute manifest request codes for depots this account
+    // owns, to fill gaps the backend's own sessions can't reach. Amethyst
+    // fork default: enabled=false (opt-IN, unlike upstream's opt-out) —
+    // this is the only feature in the tool that sends data (depot id, gid,
+    // a short-lived manifest request code) to a third party, so it stays
+    // off until the user explicitly turns it on. See ManifestDonor.h.
+    struct DonateSettings {
+        bool        enabled  = false;
+        std::string url;                       // base; empty = built-in default
+        uint32_t    intervalSecs        = 30;
+        uint32_t    maxMintsPerCycle    = 25;
+        uint32_t    minMintIntervalMs   = 2000;
+        uint32_t    maxMintsPerSession  = 0;     // 0 = unlimited (mint all session)
+        uint32_t    wantedRefreshSecs   = 300;   // re-pull the (large) wanted list only this often; minting still runs every intervalSecs
+    };
+
     struct LoadResult {
         bool applied = false;
         bool luaPathsChanged = false;
@@ -52,6 +68,7 @@ namespace Config {
     std::string GetHttpUserAgent();
     CloudSettings GetCloudSettings();
     CacheSettings GetCacheSettings();
+    DonateSettings GetDonateSettings();
     bool GetStatsEnableApi();
     bool GetUpdateEnabled();
 
@@ -94,5 +111,11 @@ namespace Config {
     // is ever made. A non-empty base URL opts in to pre-seeding <steam>\
     // depotcache from that archive.
     inline std::string cacheUrl;
+
+    // [donate] - opt-in mint-and-submit of manifest request codes for depots
+    // this account owns. enabled=false (default) means zero network activity
+    // from this feature: no wanted-list GET, no passive capture, no submit
+    // POST. See DonateSettings above and ManifestDonor.h.
+    inline DonateSettings donate;
 
 }
