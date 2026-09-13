@@ -1,4 +1,5 @@
 #include "Hooks_NetPacket.h"
+#include "Hook/ManifestProbeLogic.h"
 #include "Utils/SteamMetadata/ManifestCache.h"
 #include "Utils/SteamMetadata/ManifestClient.h"
 #include "Hooks_Misc.h"
@@ -588,6 +589,249 @@ namespace Hooks_NetPacket_FamilySharing {
     }
 
 } // namespace Hooks_NetPacket_FamilySharing
+
+
+// ════════════════════════════════════════════════════════════════
+//  Hooks_NetPacket_ManifestProbe
+//
+//  Originates ContentServerDirectory.GetManifestRequestCode#1 rather
+//  than waiting for Steam to ask, and logs the code that comes back.
+//
+//  Everything else in this file reacts: it rewrites frames Steam is
+//  already sending, or manufactures inbound ones. This is the only
+//  path that initiates, which needs three things Steam normally
+//  supplies and we have to borrow:
+//
+//    * the websocket object    -- only visible inside the send hook
+//    * a valid header          -- steamid/session must be right, so a
+//                                real outbound header is kept as a
+//                                template rather than built from parts
+//    * a jobid                 -- taken from a high, distinctive range
+//                                so it can never collide with Steam's
+//
+//  Calling oBBuildAndAsyncSendFrame directly bypasses the send hook,
+//  so Hooks_NetPacket_Manifest::HandleSend never sees these and no
+//  provider fetch is started for them. The reply still passes through
+//  that namespace's HandleRecv, which bails on an unrecognised jobid.
+//
+//  Inert until something calls Request() -- nothing in this fork does
+//  yet (upstream's file-watcher trigger, manifest_probe.txt, is
+//  deliberately not ported here; see the Fase C session audit). Wired
+//  up next by ManifestDonor's own mint cycle.
+// ════════════════════════════════════════════════════════════════
+namespace Hooks_NetPacket_ManifestProbe {
+
+    // Captured from the send hook; needed to transmit at all. The send
+    // trampoline is handed over rather than referenced directly, because
+    // HOOK_FUNC declares it further down this file.
+    using SendFrameFn = bool(__fastcall*)(void*, EWebSocketOpCode, uint8*, uint32);
+    void*       g_pWebSocket = nullptr;
+    SendFrameFn g_sendFrame  = nullptr;
+
+    // A real outbound ServiceMethodCallFromClient header, kept whole and
+    // reused. Cheaper and far more robust than assembling one: whatever
+    // routing fields Steam includes come along automatically.
+    std::vector<uint8> g_HdrTemplate;
+    std::mutex         g_Mutex;
+
+    // Range check (kJobIdBase / IsSyntheticJobId) lives in ManifestProbeLogic
+    // so it is unit-testable without the hook engine or protobuf messages.
+    uint64 g_NextJobId = ManifestProbeLogic::kJobIdBase;
+
+    struct Pending {
+        AppId_t appId;
+        uint32  depotId;
+        uint64  manifestGid;
+        std::promise<uint64> result;
+        std::chrono::steady_clock::time_point sentAt;
+    };
+    std::unordered_map<uint64, Pending> g_Pending;
+
+    // Steam answers everything it is asked, but a disconnect between send and
+    // reply would otherwise leave a promise nobody ever fulfils and a caller
+    // blocked on it forever. Swept on each new request.
+    constexpr auto kPendingTimeout = std::chrono::seconds(30);
+
+    void ExpireStale()   // caller holds g_Mutex
+    {
+        const auto now = std::chrono::steady_clock::now();
+        for (auto it = g_Pending.begin(); it != g_Pending.end(); ) {
+            if (now - it->second.sentAt > kPendingTimeout) {
+                LOG_MANIFEST_WARN("ManifestProbe: no reply for depot {} (jobid={}) after {}s",
+                                  it->second.depotId, it->first,
+                                  std::chrono::duration_cast<std::chrono::seconds>(kPendingTimeout).count());
+                it->second.result.set_value(0);
+                it = g_Pending.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+
+    void CaptureContext(void* pObject, SendFrameFn sendFrame,
+                        const uint8* pHdr, uint32 cbHdr)
+    {
+        std::lock_guard<std::mutex> lock(g_Mutex);
+        if (pObject)   g_pWebSocket = pObject;
+        if (sendFrame) g_sendFrame  = sendFrame;
+        if (g_HdrTemplate.empty() && pHdr && cbHdr)
+            g_HdrTemplate.assign(pHdr, pHdr + cbHdr);
+    }
+
+    bool Ready()
+    {
+        std::lock_guard<std::mutex> lock(g_Mutex);
+        return g_pWebSocket && g_sendFrame && !g_HdrTemplate.empty();
+    }
+
+    // Sends the request and hands back a future for the code. A future holding
+    // 0 means the request failed, was refused by Steam, or timed out -- callers
+    // treat all three the same way.
+    std::future<uint64> Request(AppId_t appId, uint32 depotId, uint64 manifestGid)
+    {
+        // Every early exit resolves the promise with 0 rather than dropping it,
+        // so a caller waiting on the future is never left hanging on a request
+        // that was never sent.
+        std::promise<uint64> promise;
+        std::future<uint64>  future = promise.get_future();
+        auto failWith = [&promise, &future]() -> std::future<uint64> {
+            promise.set_value(0);
+            return std::move(future);
+        };
+
+        std::vector<uint8> hdrTemplate;
+        void*       ws    = nullptr;
+        SendFrameFn send  = nullptr;
+        uint64      jobId = 0;
+        {
+            std::lock_guard<std::mutex> lock(g_Mutex);
+            ExpireStale();
+            if (!g_pWebSocket || !g_sendFrame || g_HdrTemplate.empty()) {
+                LOG_MANIFEST_WARN("ManifestProbe: no send context captured yet "
+                                  "(websocket={}, sendFn={}, header={} bytes) - is Steam logged in?",
+                                  g_pWebSocket != nullptr, g_sendFrame != nullptr,
+                                  g_HdrTemplate.size());
+                return failWith();
+            }
+            hdrTemplate = g_HdrTemplate;
+            ws          = g_pWebSocket;
+            send        = g_sendFrame;
+            jobId       = ++g_NextJobId;
+        }
+
+        CMsgProtoBufHeader hdr;
+        if (!hdr.ParseFromArray(hdrTemplate.data(), static_cast<int>(hdrTemplate.size()))) {
+            LOG_MANIFEST_WARN("ManifestProbe: header template failed to parse");
+            return failWith();
+        }
+        hdr.set_target_job_name("ContentServerDirectory.GetManifestRequestCode#1");
+        hdr.set_jobid_source(jobId);
+        hdr.clear_jobid_target();
+
+        CContentServerDirectory_GetManifestRequestCode_Request req;
+        req.set_app_id(appId);
+        req.set_depot_id(depotId);
+        req.set_manifest_id(manifestGid);
+
+        const uint32 cbHdr  = static_cast<uint32>(hdr.ByteSizeLong());
+        const uint32 cbBody = static_cast<uint32>(req.ByteSizeLong());
+        std::vector<uint8> frame(sizeof(MsgHdr) + cbHdr + cbBody);
+
+        auto* mhdr = reinterpret_cast<MsgHdr*>(frame.data());
+        mhdr->eMsg = static_cast<EMsg>(
+            static_cast<uint32>(k_EMsgServiceMethodCallFromClient) | kMsgHdrProtoFlag);
+        mhdr->headerLength = cbHdr;
+
+        if (!hdr.SerializeToArray(frame.data() + sizeof(MsgHdr), cbHdr) ||
+            !req.SerializeToArray(frame.data() + sizeof(MsgHdr) + cbHdr, cbBody)) {
+            LOG_MANIFEST_WARN("ManifestProbe: failed to serialise request frame");
+            return failWith();
+        }
+
+        // Registered before sending: the reply can arrive on another thread the
+        // instant the frame goes out, and it must find the entry already there.
+        {
+            std::lock_guard<std::mutex> lock(g_Mutex);
+            Pending& p     = g_Pending[jobId];
+            p.appId        = appId;
+            p.depotId      = depotId;
+            p.manifestGid  = manifestGid;
+            p.result       = std::move(promise);
+            p.sentAt       = std::chrono::steady_clock::now();
+        }
+
+        LOG_MANIFEST_INFO("ManifestProbe send: app={} depot={} gid={} jobid={} ({} bytes)",
+                          appId, depotId, manifestGid, jobId, frame.size());
+
+        if (!send(ws, k_eWebSocketOpCode_Binary,
+                  frame.data(), static_cast<uint32>(frame.size()))) {
+            LOG_MANIFEST_WARN("ManifestProbe: send returned false for jobid={}", jobId);
+            std::lock_guard<std::mutex> lock(g_Mutex);
+            auto it = g_Pending.find(jobId);
+            if (it != g_Pending.end()) {
+                it->second.result.set_value(0);
+                g_Pending.erase(it);
+            }
+        }
+        return future;
+    }
+
+    // True when the reply belonged to us, meaning the normal manifest
+    // handler should not look at it.
+    bool HandleRecv(const uint8* pBody, uint32 cbBody, const uint8* pHdr, uint32 cbHdr)
+    {
+        CMsgProtoBufHeader hdr;
+        if (!hdr.ParseFromArray(pHdr, cbHdr) || !hdr.has_jobid_target()) return false;
+
+        const uint64 jobId = hdr.jobid_target();
+        if (!ManifestProbeLogic::IsSyntheticJobId(jobId)) return false;   // cheap reject before locking
+
+        AppId_t appId = 0;
+        uint32  depotId = 0;
+        uint64  gid = 0;
+        std::promise<uint64> result;
+        {
+            std::lock_guard<std::mutex> lock(g_Mutex);
+            auto it = g_Pending.find(jobId);
+            if (it == g_Pending.end()) return false;
+            appId   = it->second.appId;
+            depotId = it->second.depotId;
+            gid     = it->second.manifestGid;
+            result  = std::move(it->second.result);
+            g_Pending.erase(it);
+        }
+
+        CContentServerDirectory_GetManifestRequestCode_Response resp;
+        if (!resp.ParseFromArray(pBody, cbBody)) {
+            LOG_MANIFEST_WARN("ManifestProbe recv: failed to parse response for jobid={}", jobId);
+            result.set_value(0);
+            return true;
+        }
+
+        const uint64 code = resp.has_manifest_request_code() ? resp.manifest_request_code() : 0;
+        // Only consumed by the LOG_MANIFEST_* calls below, which are no-ops in
+        // Release (see the OPENSTEAMTOOL_LOGGING_ENABLED comment in
+        // CMakeLists.txt) -- maybe_unused avoids an unused-variable warning
+        // in that config, same idiom as ManifestClient.cpp's providerName.
+        [[maybe_unused]] const int32 res = hdr.has_eresult() ? hdr.eresult() : 0;
+
+        if (code) {
+            LOG_MANIFEST_INFO("ManifestProbe recv: app={} depot={} gid={} -> code={} (eresult={})",
+                              appId, depotId, gid, code, res);
+        } else {
+            // eresult 2 is generic failure, which normally means the depot is
+            // not licensed to this account. eresult 8 (InvalidParam) has also
+            // been seen on an app_id=0 request for a depot the account does
+            // own -- 0 satisfies the access check most of the time but not
+            // reliably, so a failure here is not proof of missing ownership.
+            LOG_MANIFEST_WARN("ManifestProbe recv: app={} depot={} gid={} -> NO CODE (eresult={})",
+                              appId, depotId, gid, res);
+        }
+        result.set_value(code);
+        return true;
+    }
+
+} // namespace Hooks_NetPacket_ManifestProbe
 
 
 // ════════════════════════════════════════════════════════════════
@@ -1393,6 +1637,8 @@ namespace {
         switch (eMsg) {
 
         case k_EMsgServiceMethodCallFromClient: {   // 151
+            // Keep one real header as a template for originated requests.
+            Hooks_NetPacket_ManifestProbe::CaptureContext(nullptr, nullptr, pHdr, cbHdr);
             CMsgProtoBufHeader hdr;
             if (hdr.ParseFromArray(pHdr, cbHdr) && hdr.has_target_job_name()) {
                 g_NeedReplaceSend = SendServiceJob(hdr.target_job_name().c_str(), pBody, cbBody, pHdr, cbHdr);
@@ -1448,6 +1694,11 @@ namespace {
             return;
 
         case HASH_JOB_GetManifestRequestCode:
+            // Replies to our own originated requests are consumed here; the
+            // normal handler would ignore them anyway, but this keeps the two
+            // paths from ever having to reason about each other.
+            if (Hooks_NetPacket_ManifestProbe::HandleRecv(pBody, cbBody, pHdr, cbHdr))
+                return;
             Hooks_NetPacket_Manifest::HandleRecv(pBody, cbBody, pHdr, cbHdr);
             return;
 
@@ -1518,6 +1769,12 @@ namespace {
     {
         if (eWebSocketOpCode != k_eWebSocketOpCode_Binary)
             return oBBuildAndAsyncSendFrame(pObject, eWebSocketOpCode, pubData, cubData);
+
+        // The connection object is only ever visible here, and originating a
+        // request needs it. Captured on every binary frame so it tracks a
+        // reconnect rather than going stale.
+        Hooks_NetPacket_ManifestProbe::CaptureContext(
+            pObject, oBBuildAndAsyncSendFrame, nullptr, 0);
 
         // Legacy CD-key request (EMsg 730) is a non-proto struct message that
         // UnpackRaw skips. Intercept it here: if we answer it locally, suppress
@@ -1619,5 +1876,15 @@ namespace Hooks_NetPacket {
         UNINSTALL_HOOK(BBuildAndAsyncSendFrame);
         UNINSTALL_HOOK(RecvPkt);
         UNHOOK_END();
+    }
+
+    // Originates a GetManifestRequestCode call instead of waiting for Steam
+    // to ask (see Hooks_NetPacket_ManifestProbe above). A future holding 0
+    // means the request failed, was refused by Steam, or timed out.
+    // No caller in this fork yet gates this on [donate] -- ManifestDonor
+    // (the only intended caller) checks Config::GetDonateSettings().enabled
+    // itself before ever reaching here.
+    std::future<uint64_t> RequestManifestCode(AppId_t appId, uint32_t depotId, uint64_t gid) {
+        return Hooks_NetPacket_ManifestProbe::Request(appId, depotId, gid);
     }
 }

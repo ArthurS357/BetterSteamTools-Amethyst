@@ -64,6 +64,11 @@
 # ManifestClient::FetchActive, split out the same way) needs only
 # Steam/Types.h and <cstdio> for snprintf -- no WinHTTP, Config, or
 # LuaConfig, so it compiles here without the rest of ManifestClient.
+#
+# ManifestProbeLogic.h (the jobid-range predicate behind
+# Hooks_NetPacket_ManifestProbe, split out of Hooks_NetPacket.cpp the same
+# way) is header-only and constexpr -- <cstdint> only, so it needs no source
+# file registered below, just the test that includes it.
 # ---------------------------------------------------------------------------
 
 include(GTestDep)   # our recipe: GTest::gtest_main / GTest::gmock (/MT)
@@ -86,6 +91,7 @@ add_executable(AmethystToolTests
     manifest_cache_logic_test.cpp
     donate_config_logic_test.cpp
     manifest_url_logic_test.cpp
+    manifest_probe_logic_test.cpp
 
     # Units under test, compiled directly (no OSTPlatform lib link) — see header.
     "${_ostp}/Numbers.cpp"
