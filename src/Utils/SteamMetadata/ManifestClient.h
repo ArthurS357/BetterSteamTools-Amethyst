@@ -18,11 +18,19 @@ namespace ManifestClient {
     // Name of the currently active provider (for logging / diagnostics).
     const char* ActiveProviderName();
 
-    // Overrides every built-in provider with a custom URL template containing
-    // the literal placeholder "{gid}" (substituted with the manifest gid as an
-    // unsigned 64-bit decimal). Takes precedence over SetProvider while set.
-    // Pass an empty string to clear the override and revert to the provider
-    // selected via SetProvider.
+    // Overrides every built-in provider with a custom URL template. Takes
+    // precedence over SetProvider (and the provider's depot-aware template)
+    // unconditionally while set. Pass an empty string to clear the override
+    // and revert to the provider selected via SetProvider.
+    //
+    // Placeholders substituted: "{gid}" (the manifest gid, unsigned 64-bit
+    // decimal) -- REQUIRED, this is what makes a template usable at all --
+    // plus the OPTIONAL "{appid}" and "{depotid}" for providers that need
+    // depot-aware requests (see ManifestClient.cpp for why: Valve made the
+    // request code depot-bound on 2026-09-09, so a gid-only endpoint only
+    // works for free-to-play carrier depots and 401s at the CDN for everything
+    // else). A template written before {appid}/{depotid} existed, using only
+    // {gid}, is still valid and does not need migrating.
     //
     // Returns false (override left unchanged) if `urlTemplate` is non-empty and
     // missing "{gid}". The response is expected as a plain decimal request code

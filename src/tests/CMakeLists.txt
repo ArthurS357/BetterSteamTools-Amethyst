@@ -59,6 +59,11 @@
 # needs only <toml++/toml.hpp> (header-only, linked via tomlplusplus::tomlplusplus
 # below) and Config.h -- no Lua/LuaConfig, WinHTTP, or spdlog, so it compiles
 # here without the rest of Utils/Config.
+#
+# ManifestUrlLogic.cpp (the URL-selection/construction logic behind
+# ManifestClient::FetchActive, split out the same way) needs only
+# Steam/Types.h and <cstdio> for snprintf -- no WinHTTP, Config, or
+# LuaConfig, so it compiles here without the rest of ManifestClient.
 # ---------------------------------------------------------------------------
 
 include(GTestDep)   # our recipe: GTest::gtest_main / GTest::gmock (/MT)
@@ -80,6 +85,7 @@ add_executable(AmethystToolTests
     license_list_logic_test.cpp
     manifest_cache_logic_test.cpp
     donate_config_logic_test.cpp
+    manifest_url_logic_test.cpp
 
     # Units under test, compiled directly (no OSTPlatform lib link) — see header.
     "${_ostp}/Numbers.cpp"
@@ -105,6 +111,9 @@ add_executable(AmethystToolTests
     # [donate] TOML parsing/clamping, split out of Config.cpp so it compiles
     # here without Lua/LuaConfig, WinHTTP, or spdlog (see header comment above).
     "${CMAKE_CURRENT_SOURCE_DIR}/../Utils/Config/DonateConfigLogic.cpp"
+    # ManifestClient's URL-selection/construction logic, split out so it
+    # compiles here without WinHTTP, Config, or LuaConfig.
+    "${CMAKE_CURRENT_SOURCE_DIR}/../Utils/SteamMetadata/ManifestUrlLogic.cpp"
 )
 
 # src/ root for production-style header spellings ("Utils/Support/FnvHash.h",

@@ -3,6 +3,7 @@
 #include "Utils/Config/Config.h"
 #include "Utils/Config/LuaConfig.h"
 #include "Utils/Logging/Log.h"
+#include "Utils/SteamMetadata/ManifestUrlLogic.h"
 
 #include <algorithm>
 #include <charconv>
@@ -41,18 +42,36 @@ namespace ManifestClient {
 
     struct Provider {
         std::string_view name;          // matches [manifest] url = "..."
-        const char*      urlTemplate;   // full literal with one %llu — for log & path
+        const char*      urlTemplate;   // one %llu (gid) — the pre-2026-09-09 shape
+        // Optional depot-aware form: %u app, %u depot, %llu gid. Preferred
+        // whenever the caller knows the depot, and required for correctness —
+        // see kProviders below. nullptr for providers that only speak gid.
+        const char*      urlTemplateEx;
         Parser           parse;
     };
 
-    consteval Provider Make(std::string_view name, const char* url, Parser parse) {
-        return {name, url, parse};
+    consteval Provider Make(std::string_view name, const char* url, const char* urlEx, Parser parse) {
+        return {name, url, urlEx, parse};
     }
 
+    // Valve made the request code depot-bound on 2026-09-09: it is derived from
+    // (depot_id, manifest_id, time, secret), and the CDN answers 401 for a code
+    // minted against any other depot. A gid-only request cannot name the depot,
+    // so the server falls back to a free-to-play carrier and the resulting code
+    // only works for 731/571/441 — every other depot 401s at the CDN and Steam
+    // reports "Failed downloading 1 manifests".
+    //
+    // So the three-segment form is not an optimisation, it is the only shape
+    // that works for ordinary depots. The gid-only template is kept solely as a
+    // fallback for when the depot is genuinely unknown, and for the two
+    // third-party providers that expose no depot-aware route.
     static constexpr Provider kProviders[] = {
-        Make("opensteamtool", "https://manifest.opensteamtool.com/%llu",       ParsePlainUint),
-        Make("wudrm",         "http://gmrc.wudrm.com/manifest/%llu",           ParsePlainUint),
-        Make("steamrun",      "https://manifest.steam.run/api/manifest/%llu",  ParseSteamRunJson),
+        Make("opensteamtool", "https://manifest.opensteamtool.com/%llu",
+                              "https://manifest.opensteamtool.com/%u/%u/%llu",  ParsePlainUint),
+        Make("wudrm",         "http://gmrc.wudrm.com/manifest/%llu",
+                              nullptr,                                          ParsePlainUint),
+        Make("steamrun",      "https://manifest.steam.run/api/manifest/%llu",
+                              nullptr,                                          ParseSteamRunJson),
     };
 
     static const Provider* g_active = &kProviders[0];   // opensteamtool
@@ -77,16 +96,13 @@ namespace ManifestClient {
         return g_active->name.data();
     }
 
+    // {gid} remains the one REQUIRED placeholder: it's what makes the template
+    // usable at all (a manifest gid is the one thing every request varies on).
+    // {appid}/{depotid} (see ManifestUrlLogic::Build) are optional additions
+    // for the post-2026-09-09 depot-aware shape -- a template written before
+    // they existed, using only {gid}, is still valid and unaffected.
     static bool HasGidPlaceholder(std::string_view urlTemplate) {
         return urlTemplate.find("{gid}") != std::string_view::npos;
-    }
-
-    static void ReplaceAll(std::string& text, std::string_view from, std::string_view to) {
-        size_t pos = 0;
-        while ((pos = text.find(from, pos)) != std::string::npos) {
-            text.replace(pos, from.size(), to);
-            pos += to.size();
-        }
     }
 
     bool SetUrlTemplateOverride(std::string_view urlTemplate) {
@@ -111,43 +127,42 @@ namespace ManifestClient {
 
     // ── fetch ─────────────────────────────────────────────────────
 
-    static bool FetchActive(uint64_t gid, uint64_t* outCode) {
+    static bool FetchActive(uint64_t gid, uint64_t* outCode, AppId_t appId, AppId_t depotId) {
         // Called with g_mutex already held by FetchManifestRequestCode below, so
         // g_urlTemplateOverride/g_active are read without a nested lock.
         const Config::ManifestTimeouts timeouts = Config::GetManifestTimeouts();
+        const Provider& p = *g_active;
 
-        char urlLog[256];
-        Parser parse = nullptr;
+        // Override (if set) short-circuits provider selection entirely --
+        // ManifestUrlLogic::Build never falls back to a provider template when
+        // g_urlTemplateOverride is non-empty. Depot-aware-vs-gid-only for the
+        // provider path is likewise decided inside Build(), not here.
+        const ManifestUrlLogic::Choice choice = ManifestUrlLogic::Build(
+            g_urlTemplateOverride, p.urlTemplate, p.urlTemplateEx, appId, depotId, gid);
+
+        Parser parse = p.parse;
         // Only consumed by LOG_MANIFEST_INFO below, which is a no-op in Release
         // (see the OPENSTEAMTOOL_LOGGING_ENABLED comment in CMakeLists.txt) --
         // maybe_unused avoids an unused-but-set-variable warning in that config.
-        [[maybe_unused]] const char* providerName = nullptr;
+        [[maybe_unused]] const char* providerName = p.name.data();
+        [[maybe_unused]] const char* shape = "gid-only";
 
-        if (!g_urlTemplateOverride.empty()) {
-            std::string url = g_urlTemplateOverride;
-            ReplaceAll(url, "{gid}", std::to_string(gid));
-            const int written = std::snprintf(urlLog, sizeof(urlLog), "%s", url.c_str());
-            if (written < 0 || static_cast<size_t>(written) >= sizeof(urlLog)) {
-                LOG_MANIFEST_WARN("manifest.url_template expansion too long, truncated: {}", url);
-            }
+        if (choice.shape == ManifestUrlLogic::Shape::Override) {
             parse = ParsePlainUint;
             providerName = "custom";
+            shape = "override";
+            // Choice::truncated is always false for Override (see Build()) --
+            // nothing to warn about here.
         } else {
-            const Provider& p = *g_active;
-            // p.urlTemplate is one of the 3 short, fixed kProviders literals above --
-            // never long enough to truncate against urlLog's 256 bytes -- but check
-            // the same way as the url_template branch above for consistency.
-            const int written = std::snprintf(urlLog, sizeof(urlLog), p.urlTemplate, gid);
-            if (written < 0 || static_cast<size_t>(written) >= sizeof(urlLog)) {
+            shape = (choice.shape == ManifestUrlLogic::Shape::DepotAware) ? "app/depot/gid" : "gid-only";
+            if (choice.truncated) {
                 LOG_MANIFEST_WARN("manifest provider URL unexpectedly long, truncated: {}", p.name);
             }
-            parse = p.parse;
-            providerName = p.name.data();
         }
 
         auto r = OSTPlatform::Http::Execute(
             L"GET",
-            urlLog,
+            choice.url.c_str(),
             nullptr,
             0,
             nullptr,
@@ -156,7 +171,11 @@ namespace ManifestClient {
             timeouts.send,
             timeouts.recv);
 
-        LOG_MANIFEST_INFO("Manifest {} status={} gid={}", providerName, r.status, gid);
+        // Log which shape was used: a gid-only request for a non-carrier depot
+        // yields a code the CDN will reject, and that is otherwise invisible
+        // until the download fails.
+        LOG_MANIFEST_INFO("Manifest {} status={} gid={} depot={} shape={}",
+                          providerName, r.status, gid, depotId, shape);
 
         if (!r.ok || r.status != 200) return false;
         return parse(r.body, outCode);
@@ -185,6 +204,6 @@ namespace ManifestClient {
             LOG_MANIFEST_WARN("Manifest gid={} lua returned nil, falling back to config", manifestGid);
         }
 
-        return FetchActive(manifestGid, outRequestCode);
+        return FetchActive(manifestGid, outRequestCode, appId, depotId);
     }
 }

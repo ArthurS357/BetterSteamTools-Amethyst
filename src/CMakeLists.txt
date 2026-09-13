@@ -135,6 +135,7 @@ add_library(AmethystTool SHARED
     Utils/SteamMetadata/ManifestCache.cpp
     Utils/SteamMetadata/ManifestCacheLogic.cpp
     Utils/SteamMetadata/ManifestClient.cpp
+    Utils/SteamMetadata/ManifestUrlLogic.cpp
     Utils/SteamMetadata/Mirror.cpp
     Utils/SteamMetadata/PatternLoader.cpp
     Utils/SteamMetadata/RemoteToml.cpp
