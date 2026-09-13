@@ -131,6 +131,8 @@ add_library(AmethystTool SHARED
     Utils/HookSupport/VehCommon.cpp
     Utils/Logging/Log.cpp
     Utils/SteamMetadata/IPCLoader.cpp
+    Utils/SteamMetadata/ManifestCache.cpp
+    Utils/SteamMetadata/ManifestCacheLogic.cpp
     Utils/SteamMetadata/ManifestClient.cpp
     Utils/SteamMetadata/Mirror.cpp
     Utils/SteamMetadata/PatternLoader.cpp

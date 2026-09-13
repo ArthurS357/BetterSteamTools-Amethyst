@@ -31,6 +31,12 @@ namespace Config {
         std::string library;
     };
 
+    // [cache] — optional pre-seed of <steam>\depotcache from a manifest
+    // archive. Empty url (the default) means the feature is fully off.
+    struct CacheSettings {
+        std::string url;
+    };
+
     struct LoadResult {
         bool applied = false;
         bool luaPathsChanged = false;
@@ -45,6 +51,7 @@ namespace Config {
     std::vector<std::string> GetRemoteUrlTemplates();
     std::string GetHttpUserAgent();
     CloudSettings GetCloudSettings();
+    CacheSettings GetCacheSettings();
     bool GetStatsEnableApi();
     bool GetUpdateEnabled();
 
@@ -82,5 +89,10 @@ namespace Config {
     // [cloud] - optional Steam Cloud save redirection via CloudRedirect.
     inline bool cloudEnabled = false;
     inline std::string cloudLibrary;
+
+    // [cache] - empty (default) disables ManifestCache entirely: no request
+    // is ever made. A non-empty base URL opts in to pre-seeding <steam>\
+    // depotcache from that archive.
+    inline std::string cacheUrl;
 
 }

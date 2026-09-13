@@ -68,6 +68,23 @@ timeout_connect_ms = 5000
 timeout_send_ms    = 10000
 timeout_recv_ms    = 10000
 
+[cache]
+# Pre-seed <Steam>\depotcache from a manifest archive, so Steam finds the
+# manifest already on disk and skips asking for a request code entirely.
+# Independent of [manifest] above (a different mechanism, different files) --
+# leaving this unset never affects url_template or the timeout_* settings.
+#
+# Empty (the default) disables the feature completely: no request is ever
+# made to any endpoint, matching AmethystTool's behavior before this option
+# existed. Set it to opt in.
+#
+# What leaves the machine when set: a plain HTTP GET to
+# "{url}/m/{depot_id}/{manifest_gid}" for depots this AmethystTool build is
+# already configured to unlock or override -- no Steam account identifier,
+# no IP beyond what any HTTP request inherently carries, and nothing at all
+# when a depot's manifest is already cached locally.
+# url = "https://manifest.luastools.xyz"
+
 [http]
 # User-Agent sent with every outgoing HTTP request (manifest, stats, remote
 # mirror). Leave unset/empty to use the built-in default, "OpenSteamTool/1.0".

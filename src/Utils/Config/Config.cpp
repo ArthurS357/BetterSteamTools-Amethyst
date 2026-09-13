@@ -34,6 +34,8 @@ namespace {
         bool updateEnabled = false;
         std::vector<InjectDll> injectDlls;
         CloudSettings cloud;
+        // Empty = ManifestCache disabled entirely (no request ever made).
+        std::string cacheUrl;
     };
 
     std::mutex g_mutex;
@@ -79,6 +81,7 @@ namespace {
         injectDlls             = snapshot.injectDlls;
         cloudEnabled           = snapshot.cloud.enabled;
         cloudLibrary           = snapshot.cloud.library;
+        cacheUrl               = snapshot.cacheUrl;
     }
 
     void ApplyManifestProvider(const std::string& provider) {
@@ -253,6 +256,12 @@ namespace {
                     snapshot.cloud.library = *val;
             }
 
+            // [cache] — empty (default) leaves ManifestCache fully off.
+            if (auto cache = tbl["cache"].as_table()) {
+                if (auto val = (*cache)["url"].value<std::string>())
+                    snapshot.cacheUrl = *val;
+            }
+
             ApplyManifestProvider(snapshot.manifestProvider);
             ManifestClient::SetUrlTemplateOverride(snapshot.manifestUrlTemplate);
             ApplyHttpUserAgent(snapshot.httpUserAgent);
@@ -339,6 +348,11 @@ namespace {
             cloudEnabled,
             cloudLibrary,
         };
+    }
+
+    CacheSettings GetCacheSettings() {
+        std::lock_guard lock(g_mutex);
+        return {cacheUrl};
     }
 
 }

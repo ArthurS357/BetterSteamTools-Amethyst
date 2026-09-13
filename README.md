@@ -167,6 +167,11 @@ timeout_connect_ms = 5000
 timeout_send_ms    = 10000
 timeout_recv_ms    = 10000
 
+[cache]
+# Pre-seed <Steam>\depotcache from a manifest archive. Off by default (empty
+# url = zero requests). See "Manifest archive cache" below.
+# url = "https://manifest.luastools.xyz"
+
 [http]
 # User-Agent for every outgoing HTTP request. Default: "OpenSteamTool/1.0" —
 # the value manifest.opensteamtool.com's WAF allowlists. Only change this if
@@ -239,6 +244,21 @@ url_template = "https://your-host/manifest/{gid}"
 ```
 
 Must contain the literal `{gid}` placeholder; a value missing it is rejected (the `url` provider stays active). The response must be the plain decimal request code in the body — same wire format as the `opensteamtool`/`wudrm` providers, since a custom endpoint can't reuse the `steamrun` JSON parser. Priority: `manifest.lua` functions above > `url_template` > `url`. Empty (the default) leaves `url` in effect — no configuration is required to keep today's behavior.
+
+### Manifest archive cache
+
+`[cache] url` in `amethysttool.toml` is a separate, independent mechanism from everything above: instead of resolving a manifest *request code*, it pre-seeds the actual manifest *file* into `<Steam>\depotcache` from an archive, so Steam finds it already on disk and never needs a request code for that depot at all. It never overrides or interacts with `[manifest] url_template` — a manifest the cache doesn't have simply falls through to the unchanged `[manifest]` flow above.
+
+```toml
+[cache]
+url = "https://manifest.luastools.xyz"
+```
+
+**Off by default.** An empty `url` (the default) disables the feature completely — AmethystTool makes zero requests to any cache/archive endpoint, identical to its behavior before this option existed. Setting it opts in.
+
+**What leaves the machine when enabled:** a plain HTTP GET to `{url}/m/{depot_id}/{manifest_gid}` for a depot this AmethystTool build is already configured to unlock or override. No Steam account identifier, no library contents, nothing beyond what any HTTP request inherently carries (source IP at the transport layer). Nothing is sent at all for a depot whose manifest is already on disk, or while the feature is off.
+
+A 404 (not archived) is remembered locally for a short window so Steam's periodic retries don't repeatedly hit the same miss; a network error or server error is never cached and is retried on the next attempt, and never blocks or delays the game's own download either way.
 
 ### Steam version compatibility
 

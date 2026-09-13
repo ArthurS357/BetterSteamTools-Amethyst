@@ -45,6 +45,14 @@
 # hooking/injection surface the AV-heuristic note below is about), and testing
 # a wire-format parser without constructing real wire bytes would not be a
 # meaningful test.
+#
+# ManifestCacheLogic.cpp (the file/negative-cache/validation logic behind
+# ManifestCache, split out of ManifestCache.cpp the same way) needs
+# <windows.h> for MoveFileExW/GetCurrentThreadId only -- both are base
+# kernel32 exports every Windows executable already links, not part of the
+# WinHTTP/Detours surface this file avoids. The archive fetch itself is
+# injected (ManifestCacheLogic::Fetcher), so no network call is possible from
+# this test binary.
 # ---------------------------------------------------------------------------
 
 include(GTestDep)   # our recipe: GTest::gtest_main / GTest::gmock (/MT)
@@ -64,6 +72,7 @@ add_executable(AmethystToolTests
     http_user_agent_test.cpp
     online_fix_logic_test.cpp
     license_list_logic_test.cpp
+    manifest_cache_logic_test.cpp
 
     # Units under test, compiled directly (no OSTPlatform lib link) — see header.
     "${_ostp}/Numbers.cpp"
@@ -83,6 +92,9 @@ add_executable(AmethystToolTests
     # generated protobuf message code alongside it (see header comment above).
     "${CMAKE_CURRENT_SOURCE_DIR}/../Hook/LicenseListLogic.cpp"
     "${PROTO_GEN_DIR}/steam_messages.pb.cc"
+    # ManifestCache's file/negative-cache/validation logic, split out so it
+    # compiles here without OSTPlatform::Http/DynamicLibrary or Config.
+    "${CMAKE_CURRENT_SOURCE_DIR}/../Utils/SteamMetadata/ManifestCacheLogic.cpp"
 )
 
 # src/ root for production-style header spellings ("Utils/Support/FnvHash.h",

@@ -1,9 +1,12 @@
 #include "Hooks_NetPacket.h"
+#include "Utils/SteamMetadata/ManifestCache.h"
 #include "Utils/SteamMetadata/ManifestClient.h"
 #include "Hooks_Misc.h"
 #include "Hooks_Package.h"
 #include "HookMacros.h"
 #include "Hook/LicenseListLogic.h"
+#include "OSTPlatform/include/Thread.h"
+#include "Utils/Config/Config.h"
 #include "dllmain.h"
 #include "Utils/Tickets/AppTicket.h"
 #include "Utils/Tickets/LegacyCDKey.h"
@@ -628,6 +631,21 @@ namespace Hooks_NetPacket_Manifest {
 
         LOG_MANIFEST_DEBUG("GetManifestRequestCode send: depot={} gid={} jobid={} app_id={}",
                             depotId, manifestGid, jobId, appId);
+
+        // Opt-in ([cache] url) pre-seed of <steam>\depotcache for the EXACT
+        // manifest Steam is asking a code for. This request is the ground
+        // truth of what Steam will download. Detached + best-effort; if the
+        // archive has it, Steam's own retry (~30 s) finds the manifest on
+        // disk and skips the code path entirely. A miss just falls through
+        // to the fetched-code attempt below, unchanged. Gated at this call
+        // site (not just inside ManifestCache) so nothing is spawned at all
+        // when the feature is off.
+        if (!Config::GetCacheSettings().url.empty()) {
+            OSTPlatform::Thread::StartDetached([appId, depotId, manifestGid]() -> uint32_t {
+                ManifestCache::EnsureCached(appId, depotId, manifestGid);
+                return 0;
+            });
+        }
 
         auto task = std::async(std::launch::async,
             [manifestGid, depotId, appId]() -> uint64 {
