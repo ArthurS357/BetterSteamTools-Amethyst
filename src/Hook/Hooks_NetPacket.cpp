@@ -1,7 +1,9 @@
 #include "Hooks_NetPacket.h"
 #include "Utils/SteamMetadata/ManifestClient.h"
 #include "Hooks_Misc.h"
+#include "Hooks_Package.h"
 #include "HookMacros.h"
+#include "Hook/LicenseListLogic.h"
 #include "dllmain.h"
 #include "Utils/Tickets/AppTicket.h"
 #include "Utils/Tickets/LegacyCDKey.h"
@@ -534,6 +536,40 @@ namespace Hooks_NetPacket_OwnershipTicket {
     }
 
 } // namespace Hooks_NetPacket_OwnershipTicket
+
+
+// ════════════════════════════════════════════════════════════════
+//  Hooks_NetPacket_Licenses
+//
+//  Incoming: CMsgClientLicenseList (eMsg 780)
+//
+//  Steam sends this once shortly after logon. It is the only place the
+//  full set of owned package ids appears — CheckAppOwnership answers per
+//  app and only for apps something asks about, so it can never enumerate.
+//  Read-only: the message is handed on untouched.
+// ════════════════════════════════════════════════════════════════
+namespace Hooks_NetPacket_Licenses {
+
+    void HandleRecv(const uint8* pBody, uint32 cbBody)
+    {
+        std::vector<LicenseListLogic::LicenseEntry> parsed;
+        if (!LicenseListLogic::ParseOwnedLicenses(pBody, cbBody, parsed)) {
+            LOG_PACKAGE_WARN("LicenseList: failed to parse CMsgClientLicenseList");
+            return;
+        }
+
+        std::vector<Hooks_Package::License> licenses;
+        licenses.reserve(parsed.size());
+        for (const auto& lic : parsed)
+            licenses.push_back({static_cast<PackageId_t>(lic.packageId), lic.accessToken});
+
+        LOG_PACKAGE_INFO("LicenseList: {} license(s)", licenses.size());
+
+        Hooks_Package::OnLicenseList(std::move(licenses));
+        Hooks_Package::TryDumpOwnedDepots();
+    }
+
+} // namespace Hooks_NetPacket_Licenses
 
 
 // ════════════════════════════════════════════════════════════════
@@ -1443,6 +1479,10 @@ namespace {
 
         case k_EMsgClientGetAppOwnershipTicketResponse:   // 858
             Hooks_NetPacket_OwnershipTicket::HandleRecv(pBody, cbBody);
+            return;
+
+        case k_EMsgClientLicenseList:                     // 780
+            Hooks_NetPacket_Licenses::HandleRecv(pBody, cbBody);
             return;
 
         default:

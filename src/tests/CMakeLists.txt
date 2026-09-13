@@ -34,6 +34,17 @@
 # http_user_agent_test.cpp only includes OSTPlatform/include/Http.h (not
 # Http.cpp): kDefaultUserAgent is a header-only constexpr precisely so this
 # regression test needs no WinHTTP link dependency either.
+#
+# LicenseListLogic.cpp (CMsgClientLicenseList parsing, split out of
+# Hooks_NetPacket.cpp the same way OnlineFixLogic.cpp was) is the one unit here
+# that genuinely needs protobuf -- it parses a real Steam wire message. That
+# pulls the generated steam_messages.pb.cc plus libprotobuf/libprotobuf-lite
+# into this executable, same config split as the AmethystTool target itself.
+# This is a deliberate, scoped exception to the "no heavy deps" framing above:
+# protobuf is a normal, widely-used serialization library (not the
+# hooking/injection surface the AV-heuristic note below is about), and testing
+# a wire-format parser without constructing real wire bytes would not be a
+# meaningful test.
 # ---------------------------------------------------------------------------
 
 include(GTestDep)   # our recipe: GTest::gtest_main / GTest::gmock (/MT)
@@ -52,6 +63,7 @@ add_executable(AmethystToolTests
     tokeer_parsing_test.cpp
     http_user_agent_test.cpp
     online_fix_logic_test.cpp
+    license_list_logic_test.cpp
 
     # Units under test, compiled directly (no OSTPlatform lib link) — see header.
     "${_ostp}/Numbers.cpp"
@@ -67,22 +79,40 @@ add_executable(AmethystToolTests
     # Online-fix AppID-flip decision split out of Hooks_Misc.cpp so it compiles
     # here without HookMacros.h's Detour/PatternLoader dependency.
     "${CMAKE_CURRENT_SOURCE_DIR}/../Hook/OnlineFixLogic.cpp"
+    # CMsgClientLicenseList parsing split out of Hooks_NetPacket.cpp; needs the
+    # generated protobuf message code alongside it (see header comment above).
+    "${CMAKE_CURRENT_SOURCE_DIR}/../Hook/LicenseListLogic.cpp"
+    "${PROTO_GEN_DIR}/steam_messages.pb.cc"
 )
 
 # src/ root for production-style header spellings ("Utils/Support/FnvHash.h",
 # "OSTPlatform/include/Numbers.h"); OSTPlatform dir for the units' own
-# "include/..." spelling (e.g. Numbers.cpp -> #include "include/Encoding.h").
+# "include/..." spelling (e.g. Numbers.cpp -> #include "include/Encoding.h");
+# PROTO_GEN_DIR for the generated steam_messages.pb.h LicenseListLogic.cpp and
+# the test both include.
 target_include_directories(AmethystToolTests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/..
     ${_ostp}
+    "${PROTO_GEN_DIR}"
 )
 
-# BCrypt backs Hash::Sha256OfBuffer; no other platform lib is needed because the
-# compiled units, with logging disabled, reference nothing from Detours/WinHTTP.
+# Both license_list_logic_test.cpp and this build's copy of LicenseListLogic.cpp
+# only #include steam_messages.pb.h; neither is itself an OUTPUT of the proto
+# custom command, so without this, their first-ever compile can race ahead of
+# this config's pb.h regeneration (see GenerateProtoHeaders in ../CMakeLists.txt
+# for why OBJECT_DEPENDS was not used here instead).
+add_dependencies(AmethystToolTests GenerateProtoHeaders)
+
+# BCrypt backs Hash::Sha256OfBuffer. libprotobuf(-lite) backs the generated
+# steam_messages.pb.cc that LicenseListLogic.cpp depends on -- same Debug/
+# Release split as the AmethystTool target, so the test binary always matches
+# whichever variant (full Message vs. lite MessageLite) that config generated.
 target_link_libraries(AmethystToolTests PRIVATE
     GTest::gtest_main
     GTest::gmock
     Bcrypt
+    $<$<CONFIG:Debug>:libprotobuf>
+    $<$<CONFIG:Release>:libprotobuf-lite>
 )
 
 # Register every TEST() with CTest. PRE_TEST defers enumeration to test time,

@@ -85,6 +85,22 @@ add_custom_command(
     VERBATIM
 )
 
+# A source file that only #includes steam_messages.pb.h (rather than being one
+# of the custom command's own OUTPUTs, like steam_messages.pb.cc is) has no
+# build-graph edge to it until a first successful compile records the #include
+# via /showIncludes. On that file's very first-ever compile, Ninja can start
+# compiling it before this config's pb.h regeneration has run, silently
+# picking up a stale or nonexistent header. This target makes the ordering
+# explicit for such consumers (see Hook/LicenseListLogic.cpp below and its
+# test) via add_dependencies, without relying on OBJECT_DEPENDS -- which does
+# not reliably resolve the $<CONFIG> in PROTO_GEN_DIR under the Ninja
+# Multi-Config generator (observed: literal "generated/$<CONFIG>" reaching
+# Ninja and failing to resolve as a path).
+add_custom_target(GenerateProtoHeaders DEPENDS
+    "${PROTO_GEN_DIR}/steam_messages.pb.h"
+    "${PROTO_GEN_DIR}/steam_messages.pb.cc"
+)
+
 # ---------------------------------------------------------------------------
 # OSTPlatform — internal static library that owns the OS-specific backends.
 # Its build is defined in its own module CMakeLists so this top-level file stays
@@ -148,6 +164,7 @@ add_library(AmethystTool SHARED
     Hook/Hooks_Manifest.cpp
     Hook/Hooks_Misc.cpp
     Hook/OnlineFixLogic.cpp
+    Hook/LicenseListLogic.cpp
     Hook/Hooks_NetPacket.cpp
     Hook/PendingAPICalls.cpp
     Hook/Hooks_SteamUI.cpp
@@ -163,6 +180,8 @@ target_include_directories(AmethystTool PRIVATE
     ${CMAKE_CURRENT_BINARY_DIR}/generated
     ${CMAKE_CURRENT_BINARY_DIR}/generated/$<CONFIG>
 )
+
+add_dependencies(AmethystTool GenerateProtoHeaders)
 
 target_link_libraries(AmethystTool PRIVATE
     OSTPlatform

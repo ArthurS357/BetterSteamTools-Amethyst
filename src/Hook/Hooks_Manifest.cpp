@@ -2,6 +2,8 @@
 #include "HookMacros.h"
 #include "dllmain.h"
 #include <format>
+#include <mutex>
+#include <unordered_map>
 
 // ═══════════════════════════════════════════════════════════════════
 //  Manifest override hooks:
@@ -9,6 +11,25 @@
 //      in the output vector (replaces the old KV-tree approach).
 // ═══════════════════════════════════════════════════════════════════
 namespace {
+
+    // depotId -> (appId, Steam's own manifest GID). Recorded before the
+    // override pass below, so this is what Steam believes rather than what we
+    // told it. Not consumed by anything yet in this build — LookupDepot exists
+    // so a future depot-aware caller (manifest probing) has a bridge to a real
+    // app id without needing its own capture of BuildDepotDependency.
+    struct DepotSeen { AppId_t appId; uint64 gid; };
+    std::unordered_map<uint32, DepotSeen> g_depotsSeen;
+    std::mutex g_depotsSeenMutex;
+
+    void RecordDepots(const CUtlVector<DepotEntry>* vec) {
+        if (!vec) return;
+        std::lock_guard<std::mutex> lock(g_depotsSeenMutex);
+        for (uint32 i = 0; i < vec->m_Size; ++i) {
+            const DepotEntry& e = vec->m_Memory.m_pMemory[i];
+            if (!e.DepotId || !e.ManifestGid) continue;
+            g_depotsSeen[e.DepotId] = {e.AppId, e.ManifestGid};
+        }
+    }
 
     std::string DepotEntryDebug(const DepotEntry& e) {
         return std::format("DepotId={} AppId={} Gid={} Size={} Dlc={} Lcs={} Carry={} Shared={}",
@@ -41,6 +62,10 @@ namespace {
         }
 
         if (!result) return result;
+
+        // Before the override pass, so what is cached is Steam's GID.
+        RecordDepots(pDepotInfo);
+        RecordDepots(pSharedDepotInfo);
 
         const auto& overrides = LuaConfig::GetManifestOverrides();
         if (overrides.empty()) return result;
@@ -77,5 +102,14 @@ namespace Hooks_Manifest {
         UNHOOK_BEGIN();
         UNINSTALL_HOOK(BuildDepotDependency);
         UNHOOK_END();
+    }
+
+    bool LookupDepot(uint32_t depotId, AppId_t& outAppId, uint64_t& outGid) {
+        std::lock_guard<std::mutex> lock(g_depotsSeenMutex);
+        auto it = g_depotsSeen.find(depotId);
+        if (it == g_depotsSeen.end()) return false;
+        outAppId = it->second.appId;
+        outGid   = it->second.gid;
+        return true;
     }
 }
