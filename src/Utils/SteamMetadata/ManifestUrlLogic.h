@@ -62,4 +62,16 @@ namespace ManifestUrlLogic {
                                const char* providerTemplateEx,
                                AppId_t appId, AppId_t depotId, uint64_t gid);
 
+    // Whether FetchActive should retry with the gid-only URL after `shape`'s
+    // request failed. Only DepotAware has anything to fall back to:
+    //   - Override is the user's own URL (url_template) and is never rewritten,
+    //     silently or otherwise -- a failure there is reported as-is.
+    //   - GidOnly is already the fallback shape; there is nothing simpler left.
+    // A caller should pass requestFailed=true only after actually attempting
+    // the HTTP request for `shape` and observing !ok/non-200 -- this function
+    // makes no network call and has no opinion on what "failed" means.
+    [[nodiscard]] constexpr bool ShouldFallbackToGidOnly(Shape shape, bool requestFailed) noexcept {
+        return shape == Shape::DepotAware && requestFailed;
+    }
+
 }

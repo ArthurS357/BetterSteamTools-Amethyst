@@ -124,3 +124,33 @@ TEST(ManifestUrlLogicTest, EmptyOverrideTemplateIsTreatedAsUnset) {
     EXPECT_NE(c.shape, Shape::Override);
     EXPECT_EQ(c.shape, Shape::DepotAware);
 }
+
+// ── ShouldFallbackToGidOnly ────────────────────────────────────────────────
+// Regression coverage for the manifest.opensteamtool.com depot-aware
+// regression (Fase C.2, commit 2c24e56): FetchActive built exactly one URL
+// and never retried, so a provider that doesn't (yet) accept the depot-aware
+// shape broke every new-game download outright. Only DepotAware has anything
+// worth falling back to.
+using ManifestUrlLogic::ShouldFallbackToGidOnly;
+
+TEST(ManifestUrlLogicTest, FallbackDepotAwareOnFailure) {
+    EXPECT_TRUE(ShouldFallbackToGidOnly(Shape::DepotAware, /*requestFailed=*/true));
+}
+
+TEST(ManifestUrlLogicTest, NoFallbackDepotAwareOnSuccess) {
+    EXPECT_FALSE(ShouldFallbackToGidOnly(Shape::DepotAware, /*requestFailed=*/false));
+}
+
+TEST(ManifestUrlLogicTest, NoFallbackGidOnly) {
+    // Already the simplest shape -- a failure here has nothing left to fall
+    // back to, failed or not.
+    EXPECT_FALSE(ShouldFallbackToGidOnly(Shape::GidOnly, /*requestFailed=*/true));
+    EXPECT_FALSE(ShouldFallbackToGidOnly(Shape::GidOnly, /*requestFailed=*/false));
+}
+
+TEST(ManifestUrlLogicTest, NoFallbackOverride) {
+    // The user's own url_template is never silently rewritten to something
+    // else, regardless of whether their request failed.
+    EXPECT_FALSE(ShouldFallbackToGidOnly(Shape::Override, /*requestFailed=*/true));
+    EXPECT_FALSE(ShouldFallbackToGidOnly(Shape::Override, /*requestFailed=*/false));
+}

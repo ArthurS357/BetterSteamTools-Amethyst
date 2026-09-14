@@ -127,6 +127,8 @@ namespace ManifestClient {
 
     // ── fetch ─────────────────────────────────────────────────────
 
+    constexpr int kHttpOk = 200;
+
     static bool FetchActive(uint64_t gid, uint64_t* outCode, AppId_t appId, AppId_t depotId) {
         // Called with g_mutex already held by FetchManifestRequestCode below, so
         // g_urlTemplateOverride/g_active are read without a nested lock.
@@ -177,7 +179,37 @@ namespace ManifestClient {
         LOG_MANIFEST_INFO("Manifest {} status={} gid={} depot={} shape={}",
                           providerName, r.status, gid, depotId, shape);
 
-        if (!r.ok || r.status != 200) return false;
+        // Single fallback retry: a depot-aware request that failed (transport
+        // error, non-200 -- includes a WAF/route rejection a provider server
+        // does not recognize yet) gets one retry against the plain gid-only
+        // URL before giving up. Never applies to Override (the user's own
+        // url_template is reported as failed, not silently swapped for
+        // something else) or to GidOnly (nothing simpler to fall back to).
+        // depotId=0 reuses Build()'s own "unknown depot" rule to force
+        // Shape::GidOnly rather than duplicating that decision here.
+        if (ManifestUrlLogic::ShouldFallbackToGidOnly(choice.shape, !r.ok || r.status != kHttpOk)) {
+            LOG_MANIFEST_DEBUG("Manifest {} depot-aware failed (status={}), retrying gid-only for gid={}",
+                               providerName, r.status, gid);
+
+            const ManifestUrlLogic::Choice fallback = ManifestUrlLogic::Build(
+                g_urlTemplateOverride, p.urlTemplate, p.urlTemplateEx, appId, /*depotId=*/0, gid);
+
+            r = OSTPlatform::Http::Execute(
+                L"GET",
+                fallback.url.c_str(),
+                nullptr,
+                0,
+                nullptr,
+                timeouts.resolve,
+                timeouts.connect,
+                timeouts.send,
+                timeouts.recv);
+
+            LOG_MANIFEST_INFO("Manifest {} status={} gid={} depot={} shape=gid-only (fallback)",
+                              providerName, r.status, gid, depotId);
+        }
+
+        if (!r.ok || r.status != kHttpOk) return false;
         return parse(r.body, outCode);
     }
 
