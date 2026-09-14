@@ -368,12 +368,12 @@ namespace {
     }
 
     CacheSettings GetCacheSettings() {
-        std::lock_guard lock(g_mutex);
+        const std::lock_guard lock(g_mutex);
         return {cacheUrl};
     }
 
     DonateSettings GetDonateSettings() {
-        std::lock_guard lock(g_mutex);
+        const std::lock_guard lock(g_mutex);
         return donate;
     }
 

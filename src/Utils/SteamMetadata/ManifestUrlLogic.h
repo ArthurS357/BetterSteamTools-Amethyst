@@ -13,7 +13,7 @@
 // decides which URL to fetch and builds it.
 namespace ManifestUrlLogic {
 
-    enum class Shape {
+    enum class Shape : std::uint8_t {
         Override,    // [manifest] url_template took precedence over everything below
         DepotAware,  // provider's app/depot/gid template (post-2026-09-09 MRC)
         GidOnly,     // provider's plain gid template (fallback / carrier-only)

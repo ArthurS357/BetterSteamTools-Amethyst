@@ -69,6 +69,11 @@
 # Hooks_NetPacket_ManifestProbe, split out of Hooks_NetPacket.cpp the same
 # way) is header-only and constexpr -- <cstdint> only, so it needs no source
 # file registered below, just the test that includes it.
+#
+# ManifestDonorLogic.cpp (the network-gating predicates and wanted-list line
+# parser behind ManifestDonor, split out the same way) needs only
+# Steam/Types.h and <charconv> -- no OSTPlatform::Http/Thread, Config, or a
+# live Steam session, so it compiles here without the rest of ManifestDonor.
 # ---------------------------------------------------------------------------
 
 include(GTestDep)   # our recipe: GTest::gtest_main / GTest::gmock (/MT)
@@ -92,6 +97,7 @@ add_executable(AmethystToolTests
     donate_config_logic_test.cpp
     manifest_url_logic_test.cpp
     manifest_probe_logic_test.cpp
+    manifest_donor_logic_test.cpp
 
     # Units under test, compiled directly (no OSTPlatform lib link) — see header.
     "${_ostp}/Numbers.cpp"
@@ -120,6 +126,10 @@ add_executable(AmethystToolTests
     # ManifestClient's URL-selection/construction logic, split out so it
     # compiles here without WinHTTP, Config, or LuaConfig.
     "${CMAKE_CURRENT_SOURCE_DIR}/../Utils/SteamMetadata/ManifestUrlLogic.cpp"
+    # ManifestDonor's network-gating predicates and wanted-list parser, split
+    # out so they compile here without OSTPlatform::Http/Thread, Config, or
+    # a live Steam session.
+    "${CMAKE_CURRENT_SOURCE_DIR}/../Utils/SteamMetadata/ManifestDonorLogic.cpp"
 )
 
 # src/ root for production-style header spellings ("Utils/Support/FnvHash.h",

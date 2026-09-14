@@ -6,6 +6,7 @@
 #include "Utils/Config/LuaFileWatcher.h"
 #include "Utils/CloudRedirect/CloudRedirectHost.h"
 #include "Utils/SteamMetadata/IPCLoader.h"
+#include "Utils/SteamMetadata/ManifestDonor.h"
 #include "Utils/SteamMetadata/PatternLoader.h"
 #include "Utils/SteamMetadata/SteamDiagnostics.h"
 #include "Utils/Tokeer/TokeerBridge.h"
@@ -113,6 +114,14 @@ static uint32_t InitThread(OSTPlatform::DynamicLibrary::ModuleHandle selfModule)
     // [cloud].enabled is set and cloud_redirect.dll is present.
     CloudRedirectHost::Initialize(SteamInstallPath);
 
+    // Contributes manifest request codes for depots this account owns, on
+    // request. Started after the hooks are in place because it needs the
+    // netpacket send path; it idles until the license list resolves anyway.
+    // OFF BY DEFAULT (Amethyst fork): no-ops immediately unless the user
+    // opts in with [donate] enabled = true in amethysttool.toml -- see
+    // ManifestDonor.h and the Fase C session audit.
+    ManifestDonor::Start();
+
     // Register the amethysttool:// URI scheme so the website can drive code redemption via this
     // DLL (rundll32 handler). HKCU, no admin; idempotent. Only registered when the build
     // is configured with a Tokeer code server (OST_TOKEER_URL) — otherwise redemption is
@@ -200,6 +209,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD dwReason, PVOID pvReserved)
     {
         ConfigFileWatcher::Stop();
         LuaFileWatcher::Stop();
+        ManifestDonor::Stop();
         SteamUI::CoreUnhook();
         SteamClient::CoreUnhook();
         CloudRedirectHost::Shutdown();

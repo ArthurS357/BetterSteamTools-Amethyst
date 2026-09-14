@@ -2,6 +2,8 @@
 #include "Hook/ManifestProbeLogic.h"
 #include "Utils/SteamMetadata/ManifestCache.h"
 #include "Utils/SteamMetadata/ManifestClient.h"
+#include "Utils/SteamMetadata/ManifestDonor.h"
+#include "Utils/SteamMetadata/ManifestDonorLogic.h"
 #include "Hooks_Misc.h"
 #include "Hooks_Package.h"
 #include "HookMacros.h"
@@ -851,6 +853,14 @@ namespace Hooks_NetPacket_Manifest {
     std::mutex g_CodeMutex;
     constexpr uint32 kMaxWaitSeconds = 12;
 
+    // Passive capture: jobid_source -> (depot, gid) for every outgoing request,
+    // so HandleRecv can harvest the genuine code Steam returns for depots this
+    // account can access. Capped to bound memory if a reply never arrives.
+    struct SentReq { uint32 depot; uint64 gid; };
+    std::unordered_map<uint64, SentReq> g_SentRequests;
+    std::mutex g_SentMutex;
+    constexpr size_t kMaxSentTracked = 4096;
+
     bool HandleSend(const uint8* pBody, uint32 cbBody,
                     const uint8* pHdr, uint32 cbHdr)
     {
@@ -860,18 +870,40 @@ namespace Hooks_NetPacket_Manifest {
             return false;
         }
         if (!req.has_depot_id() || !req.has_manifest_id()) return false;
-        if (!LuaConfig::HasDepot(req.depot_id())) return false;
 
+        const uint64 manifestGid = req.manifest_id();
+        const uint32 depotId     = req.depot_id();
+        const uint32 appId       = req.has_app_id() ? req.app_id() : 0;
+
+        // Parse the header up front: jobid_source correlates the reply, and
+        // both the passive-capture and injection paths below need it.
         CMsgProtoBufHeader hdr;
-        if (!hdr.ParseFromArray(pHdr, cbHdr) || !hdr.has_jobid_source()) {
+        const bool haveJob = hdr.ParseFromArray(pHdr, cbHdr) && hdr.has_jobid_source();
+        const uint64 jobId = haveJob ? hdr.jobid_source() : 0;
+
+        // Passive capture: remember this request so HandleRecv can harvest the
+        // real code Steam is about to return -- every request, not just Lua
+        // ones, because a genuine code from any depot the user actually
+        // downloads is worth donating and costs no extra Steam traffic. Gated
+        // on [donate] (default off, see ManifestDonor.h) at BOTH ends: here
+        // (nothing is even tracked when disabled) and again in
+        // SubmitCapturedCode below (so toggling it off mid-flight still stops
+        // the submit even for an already-tracked request).
+        if (ManifestDonorLogic::ShouldTrackSentRequest(haveJob, Config::GetDonateSettings().enabled)) {
+            const std::lock_guard<std::mutex> lock(g_SentMutex);
+            if (g_SentRequests.size() < kMaxSentTracked)
+                g_SentRequests[jobId] = {depotId, manifestGid};
+        }
+
+        // ── Injection path: only Lua depots get their code fetched and
+        //    swapped for a fetched one. Everything else passes through
+        //    untouched (and was a passive-capture candidate above). ────────
+        if (!LuaConfig::HasDepot(depotId)) return false;
+
+        if (!haveJob) {
             LOG_MANIFEST_WARN("GetManifestRequestCode: missing jobid_source in header");
             return false;
         }
-
-        uint64 jobId       = hdr.jobid_source();
-        uint64 manifestGid = req.manifest_id();
-        uint32 depotId     = req.depot_id();
-        uint32 appId       = req.has_app_id() ? req.app_id() : 0;
 
         LOG_MANIFEST_DEBUG("GetManifestRequestCode send: depot={} gid={} jobid={} app_id={}",
                             depotId, manifestGid, jobId, appId);
@@ -916,6 +948,35 @@ namespace Hooks_NetPacket_Manifest {
         }
 
         uint64 jobId = hdr.jobid_target();
+
+        // Passive capture: harvest the genuine code from this reply before the
+        // injection path below can overwrite the body. Only real successes for a
+        // request we tracked on send; the injected (non-owned) case naturally
+        // filters out here because Steam's own reply carries no valid code.
+        {
+            SentReq sent{0, 0};
+            bool tracked = false;
+            {
+                const std::lock_guard<std::mutex> lock(g_SentMutex);
+                auto it = g_SentRequests.find(jobId);
+                if (it != g_SentRequests.end()) {
+                    sent = it->second;
+                    tracked = true;
+                    g_SentRequests.erase(it);
+                }
+            }
+            if (tracked && hdr.eresult() == static_cast<int32_t>(k_EResultOK)) {
+                CContentServerDirectory_GetManifestRequestCode_Response resp;
+                if (resp.ParseFromArray(pBody, cbBody) &&
+                    resp.has_manifest_request_code() && resp.manifest_request_code()) {
+                    const uint64 code = resp.manifest_request_code();
+                    LOG_MANIFEST_DEBUG("GetManifestRequestCode recv: captured genuine code "
+                                       "for depot={} gid={}", sent.depot, sent.gid);
+                    ManifestDonor::SubmitCapturedCode(sent.depot, sent.gid, code);
+                }
+            }
+        }
+
         std::shared_future<uint64> future;
 
         {

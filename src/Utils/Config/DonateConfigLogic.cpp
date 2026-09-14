@@ -1,6 +1,18 @@
 #include "Utils/Config/DonateConfigLogic.h"
 
 namespace DonateConfigLogic {
+namespace {
+
+    // Clamp bounds for [donate]'s numeric settings -- named so a bound and
+    // its meaning travel together, and a future change to one has exactly
+    // one place to edit. Values match upstream BetterSteamTools' own ranges.
+    constexpr uint32_t kIntervalSecsMin = 30,        kIntervalSecsMax = 86400;    // 24h
+    constexpr uint32_t kMaxMintsPerCycleMin = 1,     kMaxMintsPerCycleMax = 500;
+    constexpr uint32_t kMinMintIntervalMsMin = 0,    kMinMintIntervalMsMax = 60000; // 60s
+    constexpr uint32_t kMaxMintsPerSessionMin = 0,   kMaxMintsPerSessionMax = 100000;
+    constexpr uint32_t kWantedRefreshSecsMin = 30,   kWantedRefreshSecsMax = 86400; // 24h
+
+}
 
     std::vector<RangeViolation> Apply(const toml::table& donateTable, Config::DonateSettings& out) {
         std::vector<RangeViolation> violations;
@@ -19,11 +31,11 @@ namespace DonateConfigLogic {
             }
             field = static_cast<uint32_t>(*v);
         };
-        readClamped("interval_secs",        30,  86400, out.intervalSecs);
-        readClamped("max_mints_per_cycle",   1,    500, out.maxMintsPerCycle);
-        readClamped("min_mint_interval_ms",  0,  60000, out.minMintIntervalMs);
-        readClamped("max_mints_per_session", 0, 100000, out.maxMintsPerSession);
-        readClamped("wanted_refresh_secs",  30,  86400, out.wantedRefreshSecs);
+        readClamped("interval_secs",        kIntervalSecsMin,        kIntervalSecsMax,        out.intervalSecs);
+        readClamped("max_mints_per_cycle",   kMaxMintsPerCycleMin,   kMaxMintsPerCycleMax,     out.maxMintsPerCycle);
+        readClamped("min_mint_interval_ms",  kMinMintIntervalMsMin,  kMinMintIntervalMsMax,    out.minMintIntervalMs);
+        readClamped("max_mints_per_session", kMaxMintsPerSessionMin, kMaxMintsPerSessionMax,   out.maxMintsPerSession);
+        readClamped("wanted_refresh_secs",   kWantedRefreshSecsMin,  kWantedRefreshSecsMax,    out.wantedRefreshSecs);
 
         return violations;
     }
