@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <charconv>
+#include <cstddef>
 #include <mutex>
 #include <string>
 #include <string_view>
@@ -66,6 +67,10 @@ namespace ManifestClient {
     // fallback for when the depot is genuinely unknown, and for the two
     // third-party providers that expose no depot-aware route.
     static constexpr Provider kProviders[] = {
+        // manifest.opensteamtool.com stopped serving manifests for games the
+        // account does not own (2026-09) -- kept as a selectable provider
+        // (users can still opt back in via [manifest] url), but no longer
+        // the default. See ManifestUrlLogic::kDefaultProviderName.
         Make("opensteamtool", "https://manifest.opensteamtool.com/%llu",
                               "https://manifest.opensteamtool.com/%u/%u/%llu",  ParsePlainUint),
         Make("wudrm",         "http://gmrc.wudrm.com/manifest/%llu",
@@ -74,7 +79,17 @@ namespace ManifestClient {
                               nullptr,                                          ParseSteamRunJson),
     };
 
-    static const Provider* g_active = &kProviders[0];   // opensteamtool
+    // Resolves ManifestUrlLogic::kDefaultProviderName to its row in kProviders
+    // at compile time -- a rename or typo of the constant fails the build
+    // instead of silently falling back to kProviders[0].
+    consteval std::size_t FindDefaultProviderIndex() {
+        for (std::size_t i = 0; i < sizeof(kProviders) / sizeof(kProviders[0]); ++i) {
+            if (kProviders[i].name == ManifestUrlLogic::kDefaultProviderName) return i;
+        }
+        throw "ManifestUrlLogic::kDefaultProviderName has no matching row in kProviders";
+    }
+
+    static const Provider* g_active = &kProviders[FindDefaultProviderIndex()];
     static std::mutex      g_mutex;
 
     // Empty = no override, use g_active (see SetUrlTemplateOverride). Only ever

@@ -13,6 +13,14 @@
 // decides which URL to fetch and builds it.
 namespace ManifestUrlLogic {
 
+    // Single source of truth for the built-in provider name Config.cpp and
+    // ManifestClient.cpp fall back to. manifest.opensteamtool.com stopped
+    // serving manifests for games the account does not own (2026-09), so
+    // "wudrm" replaced it as of v1.3.0. Both call sites read this constant
+    // instead of repeating the literal, so DefaultProviderIsWudrm below is an
+    // actual regression guard, not a test of an unrelated copy.
+    inline constexpr std::string_view kDefaultProviderName = "wudrm";
+
     enum class Shape : std::uint8_t {
         Override,    // [manifest] url_template took precedence over everything below
         DepotAware,  // provider's app/depot/gid template (post-2026-09-09 MRC)

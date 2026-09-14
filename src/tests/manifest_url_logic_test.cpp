@@ -154,3 +154,15 @@ TEST(ManifestUrlLogicTest, NoFallbackOverride) {
     EXPECT_FALSE(ShouldFallbackToGidOnly(Shape::Override, /*requestFailed=*/true));
     EXPECT_FALSE(ShouldFallbackToGidOnly(Shape::Override, /*requestFailed=*/false));
 }
+
+// ── Default provider (v1.3.0) ────────────────────────────────────────────
+// manifest.opensteamtool.com stopped serving manifests for games the Steam
+// account does not own -- same phenomenon that motivated Valve's own MRC
+// system upstream. Config.cpp's Snapshot default and ManifestClient.cpp's
+// g_active both read ManifestUrlLogic::kDefaultProviderName instead of
+// repeating the literal, so this guards both call sites at once: a revert of
+// the constant fails here, and (separately) a mismatch against kProviders
+// fails ManifestClient.cpp's own compile-time check.
+TEST(ManifestUrlLogicTest, DefaultProviderIsWudrm) {
+    EXPECT_EQ(ManifestUrlLogic::kDefaultProviderName, "wudrm");
+}

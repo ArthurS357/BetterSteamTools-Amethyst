@@ -4,6 +4,7 @@
 #include "Utils/Config/DonateConfigLogic.h"
 #include "Utils/Logging/Log.h"
 #include "Utils/SteamMetadata/ManifestClient.h"
+#include "Utils/SteamMetadata/ManifestUrlLogic.h"
 
 #include <toml++/toml.hpp>
 
@@ -14,7 +15,7 @@ namespace Config {
 namespace {
 
     struct Snapshot {
-        std::string manifestProvider = "opensteamtool";
+        std::string manifestProvider = std::string(ManifestUrlLogic::kDefaultProviderName);
         // Empty = use manifestProvider's built-in URL. See ManifestClient::SetUrlTemplateOverride.
         std::string manifestUrlTemplate;
         ManifestTimeouts manifestTimeouts;
@@ -92,7 +93,7 @@ namespace {
     void ApplyManifestProvider(const std::string& provider) {
         if (!ManifestClient::SetProvider(provider)) {
             LOG_WARN("Unknown manifest.url \"{}\", keeping default", provider);
-            ManifestClient::SetProvider("opensteamtool");
+            ManifestClient::SetProvider(ManifestUrlLogic::kDefaultProviderName);
         }
     }
 

@@ -51,7 +51,7 @@ AmethystTool is a privacy-hardened fork of OpenSteamTools. Behavioural differenc
 - Unlock an unlimited number of unowned games.
 - Unlock all DLCs for unowned games.
 - Support auto load depot decryption keys from Lua config.
-- Support auto manifest download via `opensteamtool` / `steamrun` / `wudrm` upstream APIs (default is `opensteamtool`), a custom Lua endpoint (see [Manifest via Lua](#manifest-via-lua)), or a custom URL template (see [Manifest via a custom endpoint](#manifest-via-a-custom-endpoint)).
+- Support auto manifest download via `wudrm` / `steamrun` / `opensteamtool` upstream APIs (default is `wudrm` as of v1.3.0 — see [Provider defaults](#provider-defaults)), a custom Lua endpoint (see [Manifest via Lua](#manifest-via-lua)), or a custom URL template (see [Manifest via a custom endpoint](#manifest-via-a-custom-endpoint)).
 - Support downloading protected games or DLCs that require an access token.
 - Support binding manifest to prevent specific games from being updated.
 
@@ -155,8 +155,9 @@ The file is watched while Steam is running; valid changes are hot-reloaded witho
 level = "info"
 
 [manifest]
-# Upstream API for depot manifest request codes.  Options: "opensteamtool", "steamrun", "wudrm"
-url = "opensteamtool"
+# Upstream API for depot manifest request codes.  Options: "wudrm", "steamrun", "opensteamtool"
+# Default is "wudrm" as of v1.3.0 — see "Provider defaults" below.
+url = "wudrm"
 # Optional: bypass the providers above entirely with your own endpoint.
 # Must contain "{gid}". See "Manifest via a custom endpoint" below.
 # url_template = "https://your-host/manifest/{gid}"
@@ -212,6 +213,12 @@ If you are updating from the upstream OpenSteamTools (which read `opensteamtool.
 - Only the file name changes; the TOML keys and values are untouched.
 
 If neither file exists, built-in defaults are used (no file is created).
+
+### Provider defaults
+
+**v1.3.0 changed the default `[manifest] url` from `opensteamtool` to `wudrm`.** `manifest.opensteamtool.com` stopped serving manifests for games the signed-in account does not own — the same phenomenon that motivated Valve's own MRC (manifest request code) system. The symptom was a game showing up in the library normally, then its download failing with a connection error, even though nothing about the tool itself had changed.
+
+If your `amethysttool.toml` still has `url = "opensteamtool"` from before v1.3.0, switch it to `"wudrm"` (the new default) or `"steamrun"`. `opensteamtool` is kept as a selectable provider — it still works for content it does serve — but is no longer recommended as a default. If none of the three built-in providers work for your setup, see [Manifest via a custom endpoint](#manifest-via-a-custom-endpoint).
 
 ### Manifest via Lua
 

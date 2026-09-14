@@ -9,9 +9,16 @@ level = "debug"
 
 [manifest]
 # Which upstream API to query for depot manifest request codes.
-#   "opensteamtool" → https://manifest.opensteamtool.com/{gid}   (default)
-#   "wudrm"         → http://gmrc.wudrm.com/manifest/{gid} (recommended for China users)
+#   "wudrm"         → http://gmrc.wudrm.com/manifest/{gid}        (default; recommended)
 #   "steamrun"      → https://manifest.steam.run/api/manifest/{gid}
+#   "opensteamtool" → https://manifest.opensteamtool.com/{gid}    (legacy; may not serve new manifests)
+#
+# NOTE (2026-09, v1.3.0): manifest.opensteamtool.com stopped serving manifests
+# for games the account does not own -- symptom was "game added to library,
+# download fails with a connection error" even though the tool itself was
+# working correctly. "wudrm" is now the default. If a config still has
+# url = "opensteamtool" from before v1.3.0, switch it to "wudrm" or
+# "steamrun". If neither works for you, try a custom url_template below.
 # If <Steam>/config/stplug-in/manifest.lua defines fetch_manifest_code(gid) or
 # fetch_manifest_code_ex(app_id, depot_id, gid), those Lua functions take
 # priority over the url setting below.
@@ -44,7 +51,7 @@ level = "debug"
 #     end
 #     return nil
 # end
-url = "opensteamtool"
+url = "wudrm"
 
 # Independence override: point manifest requests at your own server instead of
 # any of the 3 built-in providers above. Empty (the default) leaves `url`
