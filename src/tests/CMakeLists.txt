@@ -86,6 +86,10 @@
 # OSTPlatform units. It was deliberately given its own TU instead of living in
 # Memory.cpp so this binary does not pick up WriteExecutableByte's RWX
 # patching path (see the AV-heuristic note above).
+#
+# ManifestHookLogic.h (the decision predicates behind the hooks in
+# Hooks_Manifest.cpp, split out the same way) is header-only and constexpr --
+# <cstdint> only, so it needs no source file registered below.
 # ---------------------------------------------------------------------------
 
 include(GTestDep)   # our recipe: GTest::gtest_main / GTest::gmock (/MT)
@@ -111,6 +115,7 @@ add_executable(AmethystToolTests
     manifest_probe_logic_test.cpp
     manifest_donor_logic_test.cpp
     net_packet_logic_test.cpp
+    manifest_hook_logic_test.cpp
 
     # Units under test, compiled directly (no OSTPlatform lib link) — see header.
     "${_ostp}/Numbers.cpp"

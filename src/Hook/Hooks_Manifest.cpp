@@ -1,5 +1,6 @@
 #include "Hooks_Manifest.h"
 #include "HookMacros.h"
+#include "Hook/ManifestHookLogic.h"
 #include "dllmain.h"
 #include "OSTPlatform/include/Thread.h"
 #include "Utils/Config/Config.h"
@@ -113,6 +114,20 @@ namespace {
         }
 
         if (!result) return result;
+
+        // An empty depot list for a lua app is appinfo caught mid-PICS-refresh;
+        // storing it makes the install "complete" with nothing downloaded. Fail
+        // the call so Steam keeps its existing config (see
+        // ManifestHookLogic::ShouldRejectEmptyDepotList).
+        if (ManifestHookLogic::ShouldRejectEmptyDepotList(
+                AppId, pDepotInfo != nullptr, pDepotInfo ? pDepotInfo->m_Size : 0,
+                LuaConfig::HasDepot(AppId, false)))
+        {
+            LOG_MANIFEST_WARN("BuildDepotDependency: app {} returned 0 depots "
+                "(appinfo mid-refresh) - failing the call so Steam keeps its "
+                "existing depot config instead of storing an empty one", AppId);
+            return false;
+        }
 
         // Before the override pass, so what is cached is Steam's GID.
         RecordDepots(pDepotInfo);
