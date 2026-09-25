@@ -8,6 +8,7 @@
 #include "Hooks_Package.h"
 #include "HookMacros.h"
 #include "Hook/LicenseListLogic.h"
+#include "Hook/NetPacketLogic.h"
 #include "OSTPlatform/include/Thread.h"
 #include "Utils/Config/Config.h"
 #include "dllmain.h"
@@ -67,31 +68,7 @@ namespace {
 
 
     // ── Packet layout ──────────────────────────────────────────
-    inline bool UnpackRaw(const uint8* data, uint32 size,
-                          EMsg& eMsg, const uint8*& pHdr, uint32& cbHdr,
-                          const uint8*& pBody, uint32& cbBody)
-    {
-        if (!data || size < sizeof(MsgHdr)) {
-        fail:
-            eMsg = static_cast<EMsg>(0);
-            cbHdr = 0;
-            pHdr = nullptr;
-            pBody = nullptr;
-            cbBody = 0;
-            return false;
-        }
-        const MsgHdr* hdr = reinterpret_cast<const MsgHdr*>(data);
-        if (!(hdr->eMsg & kMsgHdrProtoFlag)) goto fail;
-
-        eMsg  = static_cast<EMsg>(hdr->eMsg & ~kMsgHdrProtoFlag);
-        cbHdr = hdr->headerLength;
-        uint32 off = sizeof(MsgHdr) + cbHdr;
-        if (off > size) goto fail;
-        pHdr   = data + sizeof(MsgHdr);
-        pBody  = data + off;
-        cbBody = size - off;
-        return true;
-    }
+    using NetPacketLogic::UnpackRaw;   // Hook/NetPacketLogic.h (unit-tested)
 
     // ── Incoming: replace header and/or body (ring-buffer pool) ──
     inline void ReplaceRecvPacket(CNetPacket* p,
