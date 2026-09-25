@@ -75,9 +75,17 @@
 # Steam/Types.h and <charconv> -- no OSTPlatform::Http/Thread, Config, or a
 # live Steam session, so it compiles here without the rest of ManifestDonor.
 #
-# NetPacketLogic.h (the CM frame splitter behind Hooks_NetPacket.cpp, split
-# out the same way) is header-only -- Steam/Structs.h only -- so it needs no
-# source file registered below, just the test that includes it.
+# NetPacketLogic.cpp (the CM frame splitter and the CNetPacket layout
+# probe/resolver behind Hooks_NetPacket.cpp, split out the same way) needs
+# Steam/Structs.h, Steam/NetPacket.h and the generated protobuf header (the
+# probe parses CMsgProtoBufHeader) -- the protobuf link LicenseListLogic
+# already brings, nothing more.
+#
+# OSTPlatform/Windows/MemoryQuery.cpp (Memory::IsReadable, the VirtualQuery
+# walk the layout probe depends on) is compiled directly like the other
+# OSTPlatform units. It was deliberately given its own TU instead of living in
+# Memory.cpp so this binary does not pick up WriteExecutableByte's RWX
+# patching path (see the AV-heuristic note above).
 # ---------------------------------------------------------------------------
 
 include(GTestDep)   # our recipe: GTest::gtest_main / GTest::gmock (/MT)
@@ -135,6 +143,10 @@ add_executable(AmethystToolTests
     # out so they compile here without OSTPlatform::Http/Thread, Config, or
     # a live Steam session.
     "${CMAKE_CURRENT_SOURCE_DIR}/../Utils/SteamMetadata/ManifestDonorLogic.cpp"
+    # UnpackRaw + CNetPacket layout probe/resolver, split out of
+    # Hooks_NetPacket.cpp; IsReadable is the probe's memory check.
+    "${CMAKE_CURRENT_SOURCE_DIR}/../Hook/NetPacketLogic.cpp"
+    "${_ostp}/Windows/MemoryQuery.cpp"
 )
 
 # src/ root for production-style header spellings ("Utils/Support/FnvHash.h",

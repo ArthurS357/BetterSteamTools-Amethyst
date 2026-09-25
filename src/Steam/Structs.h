@@ -214,15 +214,13 @@ struct IKeyValuesSystem {
 };
 using KeyValuesSystemSteam_t = IKeyValuesSystem* (*)();
 
-struct CNetPacket
-{
-	HCONNECTION m_hConnection;
-	uint8* m_pubData;
-	uint32 m_cubData;
-	int32 m_cRef;
-	uint8* m_pubNetworkBuffer;
-	CNetPacket* m_pNext;
-};
+// Deliberately opaque -- its layout moved between Steam client builds (the beta
+// inserted two uint32 version stamps after m_hConnection, shifting the rest by
+// 8), so declaring fields here would hardcode one client version and wild-write
+// on the other. Reach m_pubData/m_cubData through NetPkt::Data()/Size() in
+// Steam/NetPacket.h, which carries the layout table; the runtime detection is
+// NetPacketLogic::LayoutResolver.
+struct CNetPacket;
 
 struct MsgHdr
 {

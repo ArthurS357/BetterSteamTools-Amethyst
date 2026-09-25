@@ -25,6 +25,7 @@ add_library(OSTPlatform STATIC
     Windows/Hash.cpp
     Windows/Http.cpp
     Windows/Memory.cpp
+    Windows/MemoryQuery.cpp
     Windows/ByteSearch.cpp
     Windows/PE.cpp
     Windows/Process.cpp
