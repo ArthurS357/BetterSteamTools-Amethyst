@@ -90,6 +90,10 @@
 # ManifestHookLogic.h (the decision predicates behind the hooks in
 # Hooks_Manifest.cpp, split out the same way) is header-only and constexpr --
 # <cstdint> only, so it needs no source file registered below.
+#
+# RemoteTomlLogic.h (the mirror chain and fall-through policy behind
+# RemoteToml::Fetch) is header-only too -- the "HTTP" is an injected callable,
+# so no source file is registered and no network call is possible.
 # ---------------------------------------------------------------------------
 
 include(GTestDep)   # our recipe: GTest::gtest_main / GTest::gmock (/MT)
@@ -116,6 +120,7 @@ add_executable(AmethystToolTests
     manifest_donor_logic_test.cpp
     net_packet_logic_test.cpp
     manifest_hook_logic_test.cpp
+    remote_toml_logic_test.cpp
 
     # Units under test, compiled directly (no OSTPlatform lib link) — see header.
     "${_ostp}/Numbers.cpp"

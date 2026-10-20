@@ -3,71 +3,30 @@
 #include "OSTPlatform/include/Http.h"
 #include "Utils/Config/Config.h"
 #include "Utils/Logging/Log.h"
+#include "Utils/SteamMetadata/RemoteTomlLogic.h"
 #include "Utils/SteamMetadata/SteamDiagnostics.h"
 
 #include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
-#include <string_view>
+#include <utility>
 #include <vector>
 
 namespace RemoteToml {
 
 namespace {
-    // Built-in mirror chain, tried in order. Used when [remote] url_template is unset.
-    // Mirrors are independent repos/hosts (not just CDN copies of one repo).
-    constexpr const char* kDefaultTemplates[] = {
-        "https://raw.githubusercontent.com/OpenSteam001/steam-monitor/{channel}/{component}/{sha256}.toml",
-        "https://cdn.jsdelivr.net/gh/OpenSteam001/steam-monitor@{channel}/{component}/{sha256}.toml",
-        "https://raw.githubusercontent.com/madoiscool/steam-monitor/{channel}/{component}/{sha256}.toml",
-        "https://cdn.jsdelivr.net/gh/madoiscool/steam-monitor@{channel}/{component}/{sha256}.toml",
-        "https://git.lua.tools/luatools/steam-monitor/raw/branch/{channel}/{component}/{sha256}.toml",
-    };
-
-    static bool HasPlaceholder(std::string_view text, std::string_view placeholder)
-    {
-        return text.find(placeholder) != std::string_view::npos;
-    }
-
-    static bool IsValidTemplate(std::string_view urlTemplate)
-    {
-        return HasPlaceholder(urlTemplate, "{channel}") &&
-               HasPlaceholder(urlTemplate, "{component}") &&
-               HasPlaceholder(urlTemplate, "{sha256}");
-    }
-
-    static void ReplaceAll(std::string& text,
-                           std::string_view from,
-                           std::string_view to)
-    {
-        size_t pos = 0;
-        while ((pos = text.find(from, pos)) != std::string::npos) {
-            text.replace(pos, from.size(), to);
-            pos += to.size();
-        }
-    }
-
-    static std::string ExpandTemplate(std::string urlTemplate,
-                                      const Request& request,
-                                      std::string_view sha256)
-    {
-        ReplaceAll(urlTemplate, "{channel}", request.channel);
-        ReplaceAll(urlTemplate, "{component}", request.component);
-        ReplaceAll(urlTemplate, "{sha256}", sha256);
-        return urlTemplate;
-    }
-
+    // Mirror order and its rationale live in RemoteTomlLogic::kDefaultTemplates.
     static std::vector<std::string> BuildUrlTemplates()
     {
         const std::vector<std::string> configured = Config::GetRemoteUrlTemplates();
         if (configured.empty())
-            return { std::begin(kDefaultTemplates), std::end(kDefaultTemplates) };
+            return { RemoteTomlLogic::kDefaultTemplates.begin(), RemoteTomlLogic::kDefaultTemplates.end() };
 
         // A configured list REPLACES the built-ins; keep only valid entries.
         std::vector<std::string> out;
         for (const std::string& tmpl : configured) {
-            if (IsValidTemplate(tmpl))
+            if (RemoteTomlLogic::IsValidTemplate(tmpl))
                 out.push_back(tmpl);
             else
                 LOG_WARN("RemoteToml: remote.url_template entry missing "
@@ -141,25 +100,26 @@ Result Fetch(const Request& request)
         }
     }
 
-    // 4. Cache miss — try remote (mirror chain with early-out on 404).
-    const std::vector<std::string> urlTemplates = BuildUrlTemplates();
+    // 4. Cache miss — try remote (mirror chain; order in RemoteTomlLogic).
+    const std::vector<std::string> urls = RemoteTomlLogic::BuildMirrorUrls(
+        BuildUrlTemplates(), request.channel, request.component, out.sha256);
     OSTPlatform::Http::Result http;
     std::string lastUrl;
 
-    for (size_t i = 0; i < urlTemplates.size(); ++i) {
-        lastUrl = ExpandTemplate(urlTemplates[i], request, out.sha256);
+    for (size_t i = 0; i < urls.size(); ++i) {
+        lastUrl = urls[i];
         LOG_INFO("RemoteToml({}/{}): downloading {}",
                  request.channel, request.component, lastUrl);
 
         http = OSTPlatform::Http::Execute(L"GET", lastUrl.c_str(),
                                           nullptr, 0, nullptr);
 
-        if (http.ok && http.status == 200) break;
+        if (RemoteTomlLogic::IsMirrorHit(http.ok, http.status)) break;
 
         // Mirrors are independent repos with possibly different coverage, so a 404
         // (or any non-200) on one does NOT imply the others lack the file — always
         // fall through to the next mirror.
-        if (i + 1 < urlTemplates.size()) {
+        if (i + 1 < urls.size()) {
             LOG_WARN("RemoteToml({}/{}): mirror failed ({} ok={} HTTP={}), trying next",
                      request.channel, request.component, lastUrl, http.ok, http.status);
         } else {
@@ -169,7 +129,7 @@ Result Fetch(const Request& request)
     }
 
     // 5. Remote OK → write cache, return body.
-    if (http.ok && http.status == 200 && !http.body.empty()) {
+    if (RemoteTomlLogic::IsMirrorHit(http.ok, http.status) && !http.body.empty()) {
         std::ofstream ofs(cachePath, std::ios::binary);
         if (ofs) {
             ofs.write(http.body.data(),
