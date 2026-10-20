@@ -6,6 +6,9 @@
 
 #include <gtest/gtest.h>
 
+#include <cstdint>
+
+using ManifestHookLogic::ShouldPreseedOnManifestLoad;
 using ManifestHookLogic::ShouldRejectEmptyDepotList;
 
 namespace {
@@ -29,6 +32,43 @@ namespace {
 
     TEST(ManifestHookLogicTest, NeverRejectsAppIdZero) {
         EXPECT_FALSE(ShouldRejectEmptyDepotList(0, true, 0, /*lua=*/true));
+    }
+
+    // ── YldLoadDepotManifest pre-seed gate ───────────────────────────
+
+    constexpr uint32_t kDepot = 3768761;
+    constexpr uint64_t kGid   = 0x1234'5678'9ABC'DEF0ull;
+
+    // Phase B regression: without [cache] url nothing may reach the network,
+    // whatever the lua state -- pinned, declared, unowned, all of it.
+    TEST(ManifestHookLogicTest, PreseedNeverFiresWithoutCacheUrl) {
+        for (const bool pinned : { false, true })
+            for (const bool lua : { false, true })
+                for (const bool owned : { false, true })
+                    EXPECT_FALSE(ShouldPreseedOnManifestLoad(/*cacheConfigured=*/false, kDepot, kGid, pinned, lua, owned))
+                        << "pinned=" << pinned << " lua=" << lua << " owned=" << owned;
+    }
+
+    TEST(ManifestHookLogicTest, PreseedsLuaDeclaredUnownedDepot) {
+        EXPECT_TRUE(ShouldPreseedOnManifestLoad(true, kDepot, kGid, /*pinned=*/false, /*luaDeclaresDepot=*/true, /*owned=*/false));
+    }
+
+    // A pin states the gid Steam will request; it is pre-seeded even when owned
+    // (same policy as the PreseedDepots sweep it replaces).
+    TEST(ManifestHookLogicTest, PreseedsPinnedDepotEvenWhenOwned) {
+        EXPECT_TRUE(ShouldPreseedOnManifestLoad(true, kDepot, kGid, /*pinned=*/true, /*luaDeclaresDepot=*/true,  /*owned=*/true));
+        EXPECT_TRUE(ShouldPreseedOnManifestLoad(true, kDepot, kGid, /*pinned=*/true, /*luaDeclaresDepot=*/false, /*owned=*/false));
+    }
+
+    // Owned, unpinned content gets working request codes from Steam itself.
+    TEST(ManifestHookLogicTest, LeavesOwnedOrNonLuaDepotsToSteam) {
+        EXPECT_FALSE(ShouldPreseedOnManifestLoad(true, kDepot, kGid, false, /*luaDeclaresDepot=*/true,  /*owned=*/true));
+        EXPECT_FALSE(ShouldPreseedOnManifestLoad(true, kDepot, kGid, false, /*luaDeclaresDepot=*/false, /*owned=*/false));
+    }
+
+    TEST(ManifestHookLogicTest, PreseedRejectsZeroDepotOrGid) {
+        EXPECT_FALSE(ShouldPreseedOnManifestLoad(true, 0, kGid, true, true, false));
+        EXPECT_FALSE(ShouldPreseedOnManifestLoad(true, kDepot, 0, true, true, false));
     }
 
 } // namespace

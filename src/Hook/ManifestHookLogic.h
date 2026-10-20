@@ -34,4 +34,23 @@ namespace ManifestHookLogic {
         return appId != 0 && (!hasOwnList || ownDepotCount == 0) && luaDeclaresApp;
     }
 
+    // YldLoadDepotManifest pre-seed gate (ported from upstream dec29b7). True
+    // when the hook should fetch the archived manifest before Steam's own
+    // depotcache check.
+    //
+    // cacheConfigured ([cache] url set) comes first: without it the feature is
+    // off and the hook must not touch the network -- ManifestCache::EnsureCached
+    // enforces the same gate again, this just keeps the opt-in visible here.
+    // A depot qualifies when a lua pins its gid (pinned wins even if owned, same
+    // as the old PreseedDepots) or a lua declares it and the account owns
+    // neither the app nor the depot -- owned content gets working request codes
+    // from Steam and is left alone.
+    [[nodiscard]] constexpr bool ShouldPreseedOnManifestLoad(
+        bool cacheConfigured, uint32_t depotId, uint64_t manifestGid,
+        bool pinned, bool luaDeclaresDepot, bool owned) noexcept
+    {
+        return cacheConfigured && depotId != 0 && manifestGid != 0 &&
+               (pinned || (luaDeclaresDepot && !owned));
+    }
+
 } // namespace ManifestHookLogic
