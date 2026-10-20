@@ -44,9 +44,9 @@
     
 // ── install ─────────────────────────────────────────────────────
 // Call between HOOK_BEGIN / HOOK_END.
-#define INSTALL_HOOK(module, name)                                    \
+#define INSTALL_HOOK_WITH(find, module, name)                         \
 do {                                                              \
-    void* _p_ = PatternLoader::FindPattern(module, #name);         \
+    void* _p_ = PatternLoader::find(module, #name);                \
     if (_p_) {                                                    \
         o##name = (name##_t)_p_;                                  \
         if (!OSTPlatform::Detour::Attach(reinterpret_cast<void**>(&o##name), reinterpret_cast<void*>(hk##name))) { \
@@ -55,8 +55,15 @@ do {                                                              \
     }                                                             \
 } while (0)
 
+#define INSTALL_HOOK(module, name)      INSTALL_HOOK_WITH(FindPattern, module, name)
 #define INSTALL_HOOK_C(name)            INSTALL_HOOK(client_hModule, name)
 #define INSTALL_HOOK_U(name)            INSTALL_HOOK(ui_hModule, name)
+
+// Best-effort hook: a missing pattern leaves o##name null and the hook
+// uninstalled, with no "Missing Signatures" popup. The detour and every
+// caller of o##name must cope with the hook never firing.
+#define INSTALL_HOOK_OPTIONAL(module, name) INSTALL_HOOK_WITH(FindPatternOptional, module, name)
+#define INSTALL_HOOK_OPTIONAL_C(name)   INSTALL_HOOK_OPTIONAL(client_hModule, name)
 
 // ── uninstall ───────────────────────────────────────────────────
 // Call between UNHOOK_BEGIN / UNHOOK_END.

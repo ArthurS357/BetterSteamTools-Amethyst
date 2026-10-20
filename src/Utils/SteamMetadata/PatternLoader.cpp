@@ -3,6 +3,7 @@
 #include "OSTPlatform/include/Memory.h"
 #include "OSTPlatform/include/Numbers.h"
 #include "Utils/Logging/Log.h"
+#include "Utils/SteamMetadata/PatternLoaderLogic.h"
 #include "Utils/SteamMetadata/RemoteToml.h"
 #include "Utils/SteamMetadata/SteamDiagnostics.h"
 #include "Utils/Support/FnvHash.h"
@@ -43,8 +44,8 @@ static std::unordered_map<OSTPlatform::DynamicLibrary::ModuleHandle, PatternMap>
 // popup with a second popup listing every dependent hook.
 static std::unordered_set<OSTPlatform::DynamicLibrary::ModuleHandle> g_failedModules;
 
-// functions whose names were not found during FindPattern
-static std::vector<std::string> g_missingFunctions;
+// required functions whose names were not found during FindPattern
+static PatternLoaderLogic::MissingFunctionLog g_missingFunctions;
 
 // ---- byte-pattern scanner ----
 
@@ -159,7 +160,7 @@ static void ShowDownloadFailedPopup(const std::string& dllName,
         "  2. Drop a matching TOML at:\n"
         "       <Steam>\\amethysttool\\pattern\\" + component + "\\" + sha256 + ".toml\n"
         "  3. Check upstream:\n"
-        "       https://github.com/OpenSteam001/steam-monitor/tree/pattern/" + component + "\n"
+        "       https://github.com/madoiscool/steam-monitor/tree/pattern/" + component + "\n"
         "  4. Consult the AmethystTool README and include the diagnostics below.");
 }
 
@@ -209,16 +210,12 @@ bool Load(OSTPlatform::DynamicLibrary::ModuleHandle module, const std::string& d
     return false;
 }
 
-void* FindPattern(OSTPlatform::DynamicLibrary::ModuleHandle module, const char* funcName)
-{
-    // If the whole module's pattern file failed to load, stay quiet — the
-    // user already saw one popup and the main.log already has the warning.
-    // No point amplifying that into one log line per hook plus a second
-    // "missing functions" popup later.
-    if (g_failedModules.count(module)) {
-        return nullptr;
-    }
+namespace {
 
+// Resolves funcName in module's pattern map: RVA first, then signature scan.
+// Logs why a lookup failed; recording it as "missing" is the caller's call.
+void* Lookup(OSTPlatform::DynamicLibrary::ModuleHandle module, const char* funcName)
+{
     uint32_t key = Fnv1aHash(funcName);
 
     auto mapIt = g_moduleMaps.find(module);
@@ -226,7 +223,6 @@ void* FindPattern(OSTPlatform::DynamicLibrary::ModuleHandle module, const char* 
         // Load() was never called for this module.
         LOG_WARN("PatternLoader: FindPattern called for module that was never loaded "
                  "('{}')", funcName);
-        g_missingFunctions.emplace_back(funcName);
         return nullptr;
     }
 
@@ -234,7 +230,6 @@ void* FindPattern(OSTPlatform::DynamicLibrary::ModuleHandle module, const char* 
     auto entryIt = map.find(key);
     if (entryIt == map.end()) {
         LOG_WARN("PatternLoader: no entry for '{}' (key=0x{:08X})", funcName, key);
-        g_missingFunctions.emplace_back(funcName);
         return nullptr;
     }
 
@@ -270,19 +265,48 @@ void* FindPattern(OSTPlatform::DynamicLibrary::ModuleHandle module, const char* 
         LOG_WARN("PatternLoader: entry for '{}' has neither rva nor sig", funcName);
     }
 
-    g_missingFunctions.emplace_back(funcName);
     return nullptr;
+}
+
+void* Find(OSTPlatform::DynamicLibrary::ModuleHandle module, const char* funcName,
+           PatternLoaderLogic::Requirement req)
+{
+    // If the whole module's pattern file failed to load, stay quiet — the
+    // user already saw one popup and the main.log already has the warning.
+    // No point amplifying that into one log line per hook plus a second
+    // "missing functions" popup later.
+    if (g_failedModules.count(module)) {
+        return nullptr;
+    }
+
+    return PatternLoaderLogic::ResolveOrRecord(funcName, req, g_missingFunctions,
+                                               [module, funcName] { return Lookup(module, funcName); });
+}
+
+} // namespace
+
+void* FindPattern(OSTPlatform::DynamicLibrary::ModuleHandle module, const char* funcName)
+{
+    return Find(module, funcName, PatternLoaderLogic::Requirement::Required);
+}
+
+void* FindPatternOptional(OSTPlatform::DynamicLibrary::ModuleHandle module, const char* funcName)
+{
+    void* addr = Find(module, funcName, PatternLoaderLogic::Requirement::Optional);
+    if (!addr)
+        LOG_INFO("PatternLoader: optional '{}' unavailable; its hook is skipped (no popup)", funcName);
+    return addr;
 }
 
 void ReportMissingFunctions()
 {
-    if (g_missingFunctions.empty()) return;
+    const std::vector<std::string> missing = g_missingFunctions.TakeAll();
+    if (missing.empty()) return;
 
     // Build the list
     std::string list;
-    for (const auto& name : g_missingFunctions)
+    for (const auto& name : missing)
         list += "  - " + name + "\n";
-    g_missingFunctions.clear();
 
     SteamDiagnostics::ShowWarning(
         "AmethystTool - Missing Signatures",

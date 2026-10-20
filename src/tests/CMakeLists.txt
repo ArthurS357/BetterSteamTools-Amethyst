@@ -94,6 +94,10 @@
 # RemoteTomlLogic.h (the mirror chain and fall-through policy behind
 # RemoteToml::Fetch) is header-only too -- the "HTTP" is an injected callable,
 # so no source file is registered and no network call is possible.
+#
+# PatternLoaderLogic.h (the required/optional "missing signature" policy
+# behind PatternLoader::FindPattern / FindPatternOptional) is header-only and
+# takes the lookup as a callable -- no TOML, module scan or popup involved.
 # ---------------------------------------------------------------------------
 
 include(GTestDep)   # our recipe: GTest::gtest_main / GTest::gmock (/MT)
@@ -121,6 +125,7 @@ add_executable(AmethystToolTests
     net_packet_logic_test.cpp
     manifest_hook_logic_test.cpp
     remote_toml_logic_test.cpp
+    pattern_loader_logic_test.cpp
 
     # Units under test, compiled directly (no OSTPlatform lib link) — see header.
     "${_ostp}/Numbers.cpp"
