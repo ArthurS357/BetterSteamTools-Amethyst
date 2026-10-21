@@ -35,7 +35,7 @@ AmethystTool es un fork de OpenSteamTools reforzado en privacidad. Diferencias d
 
 - **La autoactualización está desactivada y excluida de la compilación.** El upstream descargaba una DLL de reemplazo al inicio y se sobrescribía a sí mismo, verificando la integridad solo contra un hash servido por el mismo canal — de modo que quien controlara un espejo controlaba el código que se ejecutaba en tu máquina (un vector de ejecución remota de código), y el fork quedaba atado a la infraestructura del upstream. La compilación de Amethyst elimina por completo esta ruta; la clave `[update] enabled` se sigue leyendo por compatibilidad de configuración pero no tiene efecto. (Recompila definiendo `OST_ENABLE_AUTOUPDATE` para restaurar el comportamiento anterior.)
 - **La telemetría está desactivada por defecto.** La API de estadísticas (`https://stats.opensteamtool.com/{appid}`, que revela qué aplicaciones lanzas) es opcional: `[stats] enable_api = false` salvo que la actives.
-- **Caché local resiliente.** La [búsqueda de patrones](#compatibilidad-con-versiones-de-steam) sigue consultando el rastreador del upstream en cada inicio, pero una caché local bajo `<Steam>\amethysttool\` mantiene la herramienta funcionando cuando el servidor remoto no está accesible.
+- **Caché local resiliente.** La [búsqueda de patrones](#compatibilidad-con-versiones-de-steam) lee primero una caché local bajo `<Steam>\amethysttool\` y solo consulta los rastreadores steam-monitor cuando no hay caché (normalmente tras una actualización de Steam).
 - **Superficie renombrada.** La DLL es `AmethystTool.dll` y el archivo de configuración es `amethysttool.toml`. La configuración de un `opensteamtool.toml` previo al renombrado se migra automáticamente en el primer inicio — consulta [Migración de configuración](#migración-de-configuración).
 
 > **Prueba en un entorno aislado antes de usarlo en tu cuenta principal.** Inyectar en Steam conlleva un riesgo para la cuenta que asumes por completo — consulta [TESTING.md](TESTING.md).
@@ -209,21 +209,23 @@ El entorno de ejecución (runtime) en C++ proporciona dos funciones auxiliares d
 
 ### Compatibilidad con versiones de Steam
 
-AmethystTool ya no incluye firmas de patrones de bytes (byte-pattern signatures) dentro de la DLL. En su lugar, en cada inicio calcula el hash SHA-256 de `steamclient64.dll` y `steamui.dll` en el disco, y busca un archivo de patrones coincidente desde el rastreador ascendente en ['OpenSteam001/steam-monitor'](https://github.com/OpenSteam001/steam-monitor) (extension `pattern`).
+AmethystTool ya no incluye firmas de patrones de bytes (byte-pattern signatures) dentro de la DLL. En su lugar, en cada inicio calcula el hash SHA-256 de `steamclient64.dll` y `steamui.dll` en el disco, y busca un archivo de patrones coincidente en los rastreadores steam-monitor (rama `pattern`).
 
-Orden de búsqueda (en cada inicio):
+Orden de búsqueda:
 
-1.**GitHub raw** — `https://raw.githubusercontent.com/OpenSteam001/steam-monitor/pattern/....` Fuente canónica.
-2.**jsDelivr CDN** — alternativa automática si GitHub raw no está disponible (conexión rechazada / tiempo de espera / error 5xx). No requiere configuración. Útil en regiones donde `raw.githubusercontent.com` está bloqueado pero jsDelivr es accesible (por ejemplo, China continental).
-3.**Caché local** — `<Steam>\amethysttool\pattern\<subdir>\<sha256>.toml`. Se utiliza **únicamente** cuando el servidor remoto no está disponible. La caché se sobrescribe tras cada consulta remota exitosa.
+1. **Caché local** — `<Steam>\amethysttool\pattern\<subdir>\<sha256>.toml`. Cada archivo está indexado por el SHA-256 exacto de la DLL, así que una entrada en caché se usa tal cual y no se hace ninguna solicitud. La red solo se consulta cuando no hay caché (normalmente el primer inicio tras una actualización de Steam).
+2. **Cadena de espejos** (solo sin caché), probados en orden hasta que uno devuelva HTTP 200:
+   1. [`madoiscool/steam-monitor`](https://github.com/madoiscool/steam-monitor) — GitHub raw y luego jsDelivr. Va primero porque es el rastreador mantenido activamente.
+   2. [`OpenSteam001/steam-monitor`](https://github.com/OpenSteam001/steam-monitor) — GitHub raw y luego jsDelivr. Se mantiene como respaldo; su rama `pattern` no recibe commits desde el 2026-09-06.
+   3. `git.lua.tools/luatools/steam-monitor`.
 
-Se consulta al servidor remoto en cada inicio para que los usuarios obtengan automáticamente las nuevas publicaciones del proyecto principal (por ejemplo, si el bot añade una nueva firma o corrige una existente) sin tener que limpiar ninguna caché.
+   jsDelivr ayuda en regiones donde `raw.githubusercontent.com` está bloqueado (por ejemplo, China continental). El cuerpo obtenido se guarda en la caché.
 
-Si un paso devuelve un error **HTTP 404**, el bucle de espejos (mirrors) se detiene inmediatamente —todos los espejos sirven el mismo contenido, por lo que un 404 significa que el bot ascendente aún no ha publicado un archivo TOML para esa compilación específica de Steam—. En ese caso, el código recurre a la caché local si existe; de lo contrario, aparecerá una ventana emergente por única vez mostrando el nombre de la DLL no emparejada, su SHA-256, la ruta de caché esperada y la URL de origen. Solo se desactivarán los ganchos (hooks) vinculados a esa DLL; el resto de AmethystTool seguirá funcionando.
+Los espejos son repositorios independientes con cobertura distinta, así que un **404** en uno no detiene el bucle: se prueba el siguiente espejo. Si todos fallan, aparecerá una ventana emergente por única vez mostrando el nombre de la DLL no emparejada, su SHA-256, la ruta de caché esperada y la URL de origen. Solo se desactivarán los ganchos (hooks) vinculados a esa DLL; el resto de AmethystTool seguirá funcionando.
 
-También puedes colocar manualmente un archivo TOML de patrones en el directorio de la caché si conoces la estructura para una compilación determinada; el nombre del archivo debe ser `<sha256>.toml`. La caché de reserva lo detectará la próxima vez que el servidor remoto sea inaccesible.
+También puedes colocar manualmente un archivo TOML de patrones en el directorio de la caché si conoces la estructura para una compilación determinada; el nombre del archivo debe ser `<sha256>.toml`. Se usará en el siguiente inicio, antes de contactar cualquier espejo.
 
-> Se realiza una breve solicitud HTTPS saliente en cada inicio (una por cada DLL: `steamclient64.dll`, `steamui.dll`). Los cuerpos descargados son diminutos (~10 KB cada uno) y el proceso se ejecuta en un hilo secundario (worker thread), por lo que nunca bloquea el cargador de Steam.
+> Se realiza una breve solicitud HTTPS saliente solo cuando no hay caché (una por cada DLL: `steamclient64.dll`, `steamui.dll`). Los cuerpos descargados son diminutos (~10 KB cada uno) y el proceso se ejecuta en un hilo secundario (worker thread), por lo que nunca bloquea el cargador de Steam.
 
 #### Uso de un espejo (mirror) diferente
 

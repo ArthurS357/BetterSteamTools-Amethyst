@@ -40,7 +40,7 @@ AmethystTool 是 OpenSteamTools 的一个注重隐私的分支。与上游的行
 
 - **自动更新已禁用并从编译中移除。** 上游会在启动时下载替换用的 DLL 并原地覆盖自身，且仅根据同一渠道提供的哈希校验完整性——因此谁控制了镜像，谁就控制了在你机器上运行的代码（一个远程代码执行风险），并使该分支绑死在上游基础设施上。Amethyst 构建彻底移除了这条路径；`[update] enabled` 键仍会为兼容旧配置而被解析，但不产生任何效果。（在编译时定义 `OST_ENABLE_AUTOUPDATE` 可恢复旧行为。）
 - **遥测默认关闭。** 统计 API（`https://stats.opensteamtool.com/{appid}`，会暴露你启动了哪些应用）为可选项：除非你主动开启，否则 `[stats] enable_api = false`。
-- **具备韧性的本地缓存。** [模式查找](#steam-版本兼容性)仍会在每次启动时查询上游追踪器，但位于 `<Steam>\amethysttool\` 的本地缓存可在远端不可达时让工具继续工作。
+- **具备韧性的本地缓存。** [模式查找](#steam-版本兼容性)优先读取位于 `<Steam>\amethysttool\` 的本地缓存，仅在缓存未命中时（通常是 Steam 更新后）才查询 steam-monitor 跟踪器。
 - **重命名的接口。** DLL 为 `AmethystTool.dll`，配置文件为 `amethysttool.toml`。重命名之前的 `opensteamtool.toml` 中的设置会在首次启动时自动迁移——参见[配置迁移](#配置迁移)。
 
 > **在用于主账户之前，请先在隔离环境中测试。** 注入 Steam 带来的账户风险完全由你自己承担——参见 [TESTING.md](TESTING.md)。
@@ -216,21 +216,23 @@ C++ 运行时提供两个 Lua 辅助函数：
 
 ### Steam 版本兼容性
 
-AmethystTool 不再在 DLL 中内置字节模式签名。相反，每次启动时它计算磁盘上 `steamclient64.dll` 和 `steamui.dll` 的 SHA-256，并从上游跟踪器 [`OpenSteam001/steam-monitor`](https://github.com/OpenSteam001/steam-monitor)（`pattern` 分支）查找匹配的模式文件
+AmethystTool 不再在 DLL 中内置字节模式签名。相反，每次启动时它计算磁盘上 `steamclient64.dll` 和 `steamui.dll` 的 SHA-256，并从 steam-monitor 跟踪器（`pattern` 分支）查找匹配的模式文件
 
-查找顺序（每次启动）：
+查找顺序：
 
-1. **GitHub raw** — `https://raw.githubusercontent.com/OpenSteam001/steam-monitor/pattern/...`。规范来源
-2. **jsDelivr CDN** — 如果 GitHub raw 无法访问（连接拒绝/超时/5xx）时自动回退。无需配置。在 `raw.githubusercontent.com` 被封锁但 jsDelivr 可访问的地区很有用（如中国大陆）
-3. **本地缓存** — `<Steam>\amethysttool\pattern\<subdir>\<sha256>.toml`。仅当远程不可达时使用。每次成功远程获取后覆盖缓存
+1. **本地缓存** — `<Steam>\amethysttool\pattern\<subdir>\<sha256>.toml`。文件以 DLL 的精确 SHA-256 命名，因此缓存条目直接使用，不发出任何请求。仅在缓存未命中时（通常是 Steam 更新后的首次启动）才访问网络
+2. **镜像链**（仅缓存未命中时），按顺序尝试，直到某个返回 HTTP 200：
+   1. [`madoiscool/steam-monitor`](https://github.com/madoiscool/steam-monitor) — 先 GitHub raw，再 jsDelivr。排在首位，因为它是仍在积极维护的跟踪器
+   2. [`OpenSteam001/steam-monitor`](https://github.com/OpenSteam001/steam-monitor) — 先 GitHub raw，再 jsDelivr。作为备用保留；其 `pattern` 分支自 2026-09-06 起没有新提交
+   3. `git.lua.tools/luatools/steam-monitor`
 
-每次启动都会咨询远程，因此用户自动获取上游重新发布（例如机器人添加新签名或修复现有签名），无需清除任何缓存
+   在 `raw.githubusercontent.com` 被封锁的地区（如中国大陆），jsDelivr 很有用。成功获取的内容会写入缓存
 
-如果某步返回 **HTTP 404**，镜像循环立即停止——所有镜像提供相同内容，因此 404 意味着上游机器人尚未为此 Steam 版本发布 TOML。代码然后回退到本地缓存（如果存在）；否则出现一次性弹窗，显示不匹配的 DLL 名称、其 SHA-256、预期缓存路径和上游 URL。仅禁用与该 DLL 相关的钩子——AmethystTool 的其余部分继续工作
+各镜像是覆盖范围不同的独立仓库，因此某个镜像返回 **404** 不会终止循环——会继续尝试下一个镜像。如果所有镜像都失败，出现一次性弹窗，显示不匹配的 DLL 名称、其 SHA-256、预期缓存路径和上游 URL。仅禁用与该 DLL 相关的钩子——AmethystTool 的其余部分继续工作
 
-如果你知道给定版本的布局，也可以手动将模式 TOML 放入缓存目录；文件名必须为 `<sha256>.toml`。下次远程不可达时缓存回退会拾取它
+如果你知道给定版本的布局，也可以手动将模式 TOML 放入缓存目录；文件名必须为 `<sha256>.toml`。下次启动时会在访问任何镜像之前使用它
 
-> 每次启动执行简短的出站 HTTPS 请求（每个 DLL 一个：`steamclient64.dll`、`steamui.dll`）。下载的内容很小（每个约 10 KB），工作在线程上运行，因此永远不会阻塞 Steam 加载器
+> 仅在缓存未命中时执行简短的出站 HTTPS 请求（每个 DLL 一个：`steamclient64.dll`、`steamui.dll`）。下载的内容很小（每个约 10 KB），工作在线程上运行，因此永远不会阻塞 Steam 加载器
 
 #### 使用不同的镜像
 

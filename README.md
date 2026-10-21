@@ -40,7 +40,7 @@ AmethystTool is a privacy-hardened fork of OpenSteamTools. Behavioural differenc
 
 - **Self-update is disabled and compiled out.** Upstream downloaded a replacement DLL on startup and overwrote itself in place, verifying integrity only against a hash served by the same channel — so whoever controlled a mirror controlled the code that ran on your machine (a remote-code-execution vector), and the fork stayed tethered to upstream infrastructure. The Amethyst build removes this path entirely; the `[update] enabled` key is still parsed for config compatibility but has no effect. (Rebuild with `OST_ENABLE_AUTOUPDATE` defined to restore the old behaviour.)
 - **Telemetry is off by default.** The stats API (`https://stats.opensteamtool.com/{appid}`, which reveals which apps you launch) is opt-in: `[stats] enable_api = false` unless you turn it on.
-- **Resilient local cache.** [Pattern lookup](#steam-version-compatibility) still consults the upstream tracker on each launch, but a local cache under `<Steam>\amethysttool\` keeps the tool working when the remote is unreachable.
+- **Resilient local cache.** [Pattern lookup](#steam-version-compatibility) reads a local cache under `<Steam>\amethysttool\` first and only consults the steam-monitor trackers on a cache miss (typically after a Steam update).
 - **Renamed surface.** The DLL is `AmethystTool.dll` and the config file is `amethysttool.toml`. Settings from a pre-rename `opensteamtool.toml` are migrated automatically on first launch — see [Config migration](#config-migration).
 
 > **Test in an isolated environment before using on your main account.** Injecting into Steam carries account risk that is entirely yours — see [TESTING.md](TESTING.md).
@@ -267,6 +267,8 @@ url = "https://manifest.luastools.xyz"
 
 A 404 (not archived) is remembered locally for a short window so Steam's periodic retries don't repeatedly hit the same miss; a network error or server error is never cached and is retried on the next attempt, and never blocks or delays the game's own download either way.
 
+**When the fetch happens:** only when Steam acquires a specific manifest (the `YldLoadDepotManifest` hook, right before Steam checks `depotcache` itself), so only manifests for a download that is actually starting are fetched, workshop items included. Each fetch waits at most 5 s; on a miss or timeout Steam takes its normal request-code path. The hook is optional: if the pattern file for your Steam build lacks its signature (e.g. a TOML cached before 2026-09-19), the hook is skipped without a "Missing Signatures" popup and manifests go through the normal request-code path. Since v1.3.2 there is no startup sweep over the library.
+
 ### Manifest donation (opt-in)
 
 `[cache]` above only *downloads* — this is the one feature in AmethystTool that *sends* anything to a third party, so it needs its own explicit opt-in rather than piggybacking on a URL being set.
@@ -305,7 +307,7 @@ Lookup order:
 
 Mirrors are independent repos with different coverage, so a **404** on one does not stop the loop — the next mirror is tried. If every mirror fails, a one-shot popup appears with the unmatched DLL name, its SHA-256, the expected cache path, and the upstream URL. Only the hooks tied to that DLL are disabled — the rest of AmethystTool keeps working.
 
-You can also drop a pattern TOML into the cache directory manually if you know the layout for a given build; the file name must be `<sha256>.toml`. The cache fallback will pick it up the next time remote is unreachable.
+You can also drop a pattern TOML into the cache directory manually if you know the layout for a given build; the file name must be `<sha256>.toml`. It is used on the next launch, before any mirror is contacted.
 
 > A short outbound HTTPS request is performed only on a cache miss (one per DLL: `steamclient64.dll`, `steamui.dll`). The downloaded bodies are tiny (~10 KB each) and the work runs on a worker thread, so it never blocks Steam's loader.
 
