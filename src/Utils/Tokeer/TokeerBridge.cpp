@@ -1,6 +1,7 @@
 #include "TokeerBridge.h"
 
 #include "OSTPlatform/include/Dialog.h"
+#include "OSTPlatform/include/DynamicLibrary.h"
 #include "OSTPlatform/include/Encoding.h"
 #include "OSTPlatform/include/Http.h"
 #include "OSTPlatform/include/Numbers.h"
@@ -12,6 +13,7 @@
 #include <shellapi.h>
 
 #include <cstdint>
+#include <filesystem>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -42,6 +44,70 @@ namespace {
 
     void Warn(const std::string& title, const std::string& msg) {
         OSTPlatform::Dialog::ShowWarning(title, msg);
+    }
+
+    // This DLL lives in the Steam root, so its own directory is the Steam dir.
+    // (The rundll32 URI context never runs InitializeSteamComponents, so the
+    // SteamInstallPath global is not set here -- resolve from the module.)
+    std::filesystem::path SteamDirFromSelf() {
+        HMODULE self = nullptr;
+        GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                               GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           reinterpret_cast<LPCWSTR>(&SteamDirFromSelf), &self);
+        if (!self) return {};
+        return OSTPlatform::DynamicLibrary::GetModuleDirectory(
+            reinterpret_cast<OSTPlatform::DynamicLibrary::ModuleHandle>(self));
+    }
+
+    // Delete cached achievement schemas so Steam re-fetches the current one
+    // (picking up newly-added achievements and the sets/groups layout). The
+    // target was already validated by ParseRefreshAchievementsArg, so the appid
+    // is a plain integer and cannot steer the delete outside appcache\stats.
+    // User unlock state (UserGameStats_*, a separate file) is never touched.
+    void RefreshAchievements(const Parsing::RefreshTarget& target) {
+        namespace fs = std::filesystem;
+        constexpr std::wstring_view kSchemaPrefix = L"UserGameStatsSchema_";
+
+        // An empty Steam dir must abort: "" / "appcache" / "stats" is a path
+        // relative to rundll32's working directory, not to Steam.
+        const fs::path steamDir = SteamDirFromSelf();
+        std::error_code ec;
+        const fs::path statsDir = steamDir / L"appcache" / L"stats";
+        if (steamDir.empty() || !fs::is_directory(statsDir, ec)) {
+            Warn("AmethystTool", "Could not locate Steam's stats cache.");
+            return;
+        }
+
+        // "all" is the broad delete and this entry point is link-invocable, so
+        // make the user say yes; a single app is narrow and goes straight through.
+        if (target.all && !OSTPlatform::Dialog::ShowConfirm(
+                "Refresh Achievements",
+                "Clear the cached achievement schema of EVERY game?\n\n"
+                "Steam re-downloads them on demand. Your unlocks are untouched."))
+            return;
+
+        size_t removed = 0;
+        std::error_code rmEc;
+        if (target.all) {
+            for (fs::directory_iterator it(statsDir, ec), end; !ec && it != end; it.increment(ec)) {
+                const std::wstring name = it->path().filename().wstring();
+                if (name.rfind(kSchemaPrefix, 0) == 0 && it->path().extension() == L".bin" &&
+                    it->is_regular_file(rmEc) && fs::remove(it->path(), rmEc))
+                    ++removed;
+            }
+        } else {
+            const fs::path f = statsDir / (std::wstring(kSchemaPrefix) + std::to_wstring(target.appId) + L".bin");
+            if (fs::remove(f, rmEc)) ++removed;
+        }
+
+        LOG_INFO("TokeerBridge: RefreshAchievements({}) removed {} schema file(s)",
+                 target.all ? std::string("all") : std::to_string(target.appId), removed);
+        OSTPlatform::Dialog::ShowInfo(
+            "Achievements Refreshed",
+            std::to_string(removed) + " achievement schema(s) cleared.\n\n"
+            "Restart Steam, then open the game's achievement page to pull the "
+            "latest (including sets/groups). A running Steam keeps the old schema "
+            "in memory until restarted. Your unlocks are untouched.");
     }
 
 } // namespace
@@ -126,6 +192,14 @@ void HandleUri(const std::string& rawUrl) {
     if (parsed.action == "redeem") {
         if (!parsed.arg.empty()) Redeem(parsed.arg);
         else Warn("AmethystTool", "Missing code in link.");
+    } else if (parsed.action == "refreshachievements") {
+        const auto target = Parsing::ParseRefreshAchievementsArg(parsed.arg);
+        if (!target) {
+            LOG_WARN("TokeerBridge: refreshachievements: rejected argument '{}'", parsed.arg);
+            Warn("AmethystTool", "Invalid refreshachievements link: expected an app id or 'all'.");
+            return;
+        }
+        RefreshAchievements(*target);
     } else {
         LOG_WARN("TokeerBridge: unknown action '{}'", parsed.action);
     }

@@ -126,6 +126,7 @@ add_executable(AmethystToolTests
     manifest_hook_logic_test.cpp
     remote_toml_logic_test.cpp
     pattern_loader_logic_test.cpp
+    local_achievements_logic_test.cpp
 
     # Units under test, compiled directly (no OSTPlatform lib link) — see header.
     "${_ostp}/Numbers.cpp"
@@ -162,6 +163,9 @@ add_executable(AmethystToolTests
     # Hooks_NetPacket.cpp; IsReadable is the probe's memory check.
     "${CMAKE_CURRENT_SOURCE_DIR}/../Hook/NetPacketLogic.cpp"
     "${_ostp}/Windows/MemoryQuery.cpp"
+    # Binary-KeyValues schema/stats join behind LocalAchievements::Read, split
+    # out so it compiles here without dllmain.h, spdlog or any file IO.
+    "${CMAKE_CURRENT_SOURCE_DIR}/../Utils/Achievements/LocalAchievementsLogic.cpp"
 )
 
 # src/ root for production-style header spellings ("Utils/Support/FnvHash.h",

@@ -132,3 +132,69 @@ TEST(ParseUri, FalsePositiveGuards) {
     EXPECT_EQ(withSlash.action, "redeem");
     EXPECT_EQ(withSlash.arg, "AB/CD");
 }
+
+// ---------------------------------------------------------------------------
+// ParseRefreshAchievementsArg — amethysttool://refreshachievements[/<arg>]
+// The arg becomes part of a file name in Steam's stats cache, so it is
+// validated (strict uint32 or the literal "all"), never sanitised.
+// ---------------------------------------------------------------------------
+TEST(ParseRefreshAchievementsArg, HappyPath) {
+    const auto one = ParseRefreshAchievementsArg("730");
+    ASSERT_TRUE(one.has_value());
+    EXPECT_FALSE(one->all);
+    EXPECT_EQ(one->appId, 730u);
+
+    const auto all = ParseRefreshAchievementsArg("all");
+    ASSERT_TRUE(all.has_value());
+    EXPECT_TRUE(all->all);
+
+    const auto bare = ParseRefreshAchievementsArg("");   // amethysttool://refreshachievements
+    ASSERT_TRUE(bare.has_value());
+    EXPECT_TRUE(bare->all);
+}
+
+TEST(ParseRefreshAchievementsArg, MaliciousAndMalformed) {
+    EXPECT_FALSE(ParseRefreshAchievementsArg("../730"));                // path traversal
+    EXPECT_FALSE(ParseRefreshAchievementsArg("..\\..\\Windows"));
+    EXPECT_FALSE(ParseRefreshAchievementsArg("730/../../x"));
+    EXPECT_FALSE(ParseRefreshAchievementsArg("730\\..\\x"));
+    EXPECT_FALSE(ParseRefreshAchievementsArg("%2e%2e/730"));            // not decoded, so not digits
+    EXPECT_FALSE(ParseRefreshAchievementsArg("12abc"));                 // trailing junk
+    EXPECT_FALSE(ParseRefreshAchievementsArg("abc12"));
+    EXPECT_FALSE(ParseRefreshAchievementsArg("-1"));                    // sign
+    EXPECT_FALSE(ParseRefreshAchievementsArg("+730"));
+    EXPECT_FALSE(ParseRefreshAchievementsArg(" 730"));                  // whitespace
+    EXPECT_FALSE(ParseRefreshAchievementsArg("730 "));
+    EXPECT_FALSE(ParseRefreshAchievementsArg("7.3"));
+    EXPECT_FALSE(ParseRefreshAchievementsArg("0x2DA"));
+    EXPECT_FALSE(ParseRefreshAchievementsArg("4294967296"));            // uint32 max + 1
+    EXPECT_FALSE(ParseRefreshAchievementsArg("99999999999999999999"));  // way past uint64
+    EXPECT_FALSE(ParseRefreshAchievementsArg("0"));                     // appid 0 is never a game
+    EXPECT_FALSE(ParseRefreshAchievementsArg("ALL"));                   // literal, case-sensitive
+    EXPECT_FALSE(ParseRefreshAchievementsArg("all/730"));
+    EXPECT_FALSE(ParseRefreshAchievementsArg(std::string_view("730\0x", 5)));   // embedded NUL
+}
+
+TEST(ParseRefreshAchievementsArg, FalsePositiveGuards) {
+    const auto max = ParseRefreshAchievementsArg("4294967295");         // uint32 max is still a number
+    ASSERT_TRUE(max.has_value());
+    EXPECT_EQ(max->appId, 4294967295u);
+
+    const auto padded = ParseRefreshAchievementsArg("00730");           // leading zeros: digits only, same appid
+    ASSERT_TRUE(padded.has_value());
+    EXPECT_EQ(padded->appId, 730u);
+
+    const auto one = ParseRefreshAchievementsArg("1");
+    ASSERT_TRUE(one.has_value());
+    EXPECT_EQ(one->appId, 1u);
+}
+
+TEST(ParseUri, RefreshAchievementsRoundTrip) {
+    const auto p = ParseUri("\"amethysttool://refreshachievements/730\"");
+    ASSERT_TRUE(p.matchedScheme);
+    EXPECT_EQ(p.action, "refreshachievements");
+    EXPECT_EQ(p.arg, "730");
+
+    // An old-scheme link must not be accepted by the fork.
+    EXPECT_FALSE(ParseUri("bst://refreshachievements/730").matchedScheme);
+}

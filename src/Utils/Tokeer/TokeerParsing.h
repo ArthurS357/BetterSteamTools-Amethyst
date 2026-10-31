@@ -43,4 +43,18 @@ namespace TokeerBridge::Parsing {
     // the remainder into action/arg on the first '/'.
     [[nodiscard]] ParsedUri ParseUri(std::string_view rawUrl);
 
+    // Target of amethysttool://refreshachievements[/<arg>]: every cached
+    // achievement schema, or the one belonging to a single app.
+    struct RefreshTarget {
+        bool all = false;
+        uint32_t appId = 0;   // meaningful only when !all
+    };
+
+    // arg must be empty, the literal "all" (case-sensitive), or a plain base-10
+    // uint32 appid: digits only, no sign/space/separator, non-zero, no overflow.
+    // nullopt otherwise. The appid ends up in a file name inside Steam's stats
+    // cache, so anything else (e.g. "../x", "12abc", "99999999999") is rejected
+    // here rather than sanitised.
+    [[nodiscard]] std::optional<RefreshTarget> ParseRefreshAchievementsArg(std::string_view arg);
+
 } // namespace TokeerBridge::Parsing

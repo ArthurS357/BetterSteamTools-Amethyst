@@ -122,6 +122,8 @@ add_library(AmethystTool SHARED
     Utils/Tickets/TicketParsing.cpp
     Utils/Tickets/LegacyCDKey.cpp
     Utils/Tickets/EticketClient.cpp
+    Utils/Achievements/LocalAchievements.cpp
+    Utils/Achievements/LocalAchievementsLogic.cpp
     Utils/Config/Config.cpp
     Utils/Config/ConfigMigration.cpp
     Utils/Config/DonateConfigLogic.cpp

@@ -1,5 +1,7 @@
 #include "Utils/Tokeer/TokeerParsing.h"
 
+#include <charconv>
+
 namespace TokeerBridge::Parsing {
 
 namespace {
@@ -82,6 +84,18 @@ ParsedUri ParseUri(std::string_view rawUrl) {
     result.action = rest.substr(0, slash);
     result.arg = (slash == std::string::npos) ? "" : rest.substr(slash + 1);
     return result;
+}
+
+std::optional<RefreshTarget> ParseRefreshAchievementsArg(std::string_view arg) {
+    if (arg.empty() || arg == "all") return RefreshTarget{true, 0};
+
+    // from_chars on an unsigned type already refuses a sign, whitespace and
+    // overflow; the end-pointer check refuses trailing junk ("12abc", "1/2").
+    uint32_t appId = 0;
+    const char* const end = arg.data() + arg.size();
+    const auto [p, ec] = std::from_chars(arg.data(), end, appId);
+    if (ec != std::errc{} || p != end || appId == 0) return std::nullopt;
+    return RefreshTarget{false, appId};
 }
 
 } // namespace TokeerBridge::Parsing
