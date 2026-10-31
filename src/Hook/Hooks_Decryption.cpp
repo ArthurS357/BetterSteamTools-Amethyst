@@ -1,11 +1,35 @@
 #include "Hooks_Decryption.h"
 #include "HookMacros.h"
 #include "dllmain.h"
+#include <charconv>
+#include <mutex>
 #include <string>
+#include <string_view>
+#include <unordered_set>
 
 namespace {
 
     void* g_pConfigStoreLocal = nullptr;
+
+    // AppIds of apptickets observed being read from the local user ConfigStore.
+    // Populated by the ConfigStoreGetBinary hook; used by the forge fallback to
+    // search for any available source ticket when appid 7 / 228980 are missing.
+    // The hook runs on Steam's own threads, so the set is guarded by a mutex.
+    std::mutex g_seenAppTicketIdsMutex;
+    std::unordered_set<AppId_t> g_seenAppTicketIds;
+
+    // "apptickets\<digits>" -> appid. from_chars (no exceptions, rejects
+    // overflow) because an exception escaping a hook would take Steam down.
+    void RecordSeenAppTicketKey(std::string_view name) {
+        constexpr std::string_view kAppticketPrefix = "apptickets\\";
+        if (!name.starts_with(kAppticketPrefix)) return;
+        const std::string_view rest = name.substr(kAppticketPrefix.size());
+        AppId_t appId = 0;
+        const auto [end, ec] = std::from_chars(rest.data(), rest.data() + rest.size(), appId);
+        if (ec != std::errc{} || end != rest.data() + rest.size() || appId == 0) return;
+        std::lock_guard lock(g_seenAppTicketIdsMutex);
+        g_seenAppTicketIds.insert(appId);
+    }
 
     HOOK_FUNC(ConfigStoreGetBinary, int32, void* pObject, EConfigStore eConfigStore, const char* KeyName, char* Key, uint32 KeySize) {
         if (eConfigStore == k_EConfigStoreUserLocal && pObject && !g_pConfigStoreLocal) {
@@ -16,6 +40,9 @@ namespace {
         std::string name(KeyName);
         LOG_DECRYPTIONKEY_DEBUG("ConfigStore::GetBinary called for pObject={}, eConfigStore={}, KeyName='{}'", 
                                     pObject, static_cast<uint32>(eConfigStore), name);
+        // Record any appticket key Steam reads from the local store so the forge
+        // fallback can later search for any available source ticket.
+        if (eConfigStore == k_EConfigStoreUserLocal) RecordSeenAppTicketKey(name);
         // Expected shape: ".../<DepotId>\DecryptionKey"
         if (size_t last = name.find("\\DecryptionKey"); last != std::string::npos) {
             if (size_t start = name.find_last_of("\\", last - 1); start != std::string::npos) {
@@ -79,5 +106,10 @@ namespace Hooks_Decryption {
         }
         LOG_DECRYPTIONKEY_DEBUG("got cached ticket for AppId {} ({} bytes)", appId, ticket.size());
         return ticket;
+    }
+
+    std::vector<AppId_t> GetSeenAppTicketIds() {
+        std::lock_guard lock(g_seenAppTicketIdsMutex);
+        return {g_seenAppTicketIds.begin(), g_seenAppTicketIds.end()};
     }
 }
