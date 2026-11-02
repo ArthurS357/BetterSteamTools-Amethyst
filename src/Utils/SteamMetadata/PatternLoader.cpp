@@ -5,6 +5,7 @@
 #include "Utils/Logging/Log.h"
 #include "Utils/SteamMetadata/PatternLoaderLogic.h"
 #include "Utils/SteamMetadata/RemoteToml.h"
+#include "Utils/SteamMetadata/RemoteTomlLogic.h"
 #include "Utils/SteamMetadata/SteamDiagnostics.h"
 #include "Utils/Support/FnvHash.h"
 
@@ -189,7 +190,7 @@ bool Load(OSTPlatform::DynamicLibrary::ModuleHandle module, const std::string& d
         if (!map.empty()) {
             LOG_INFO("PatternLoader: loaded {} patterns for {} ({})",
                      map.size(), component,
-                     r.fromCache ? (r.cacheFallback ? "cache fallback" : "cache hit") : "remote");
+                     RemoteTomlLogic::DescribeLoadSource(r.fromCache, r.cacheFallback));
             g_moduleMaps[module] = std::move(map);
             return true;
         }

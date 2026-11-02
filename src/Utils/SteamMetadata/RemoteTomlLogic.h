@@ -80,4 +80,15 @@ namespace RemoteTomlLogic {
         return transportOk && status == kHttpOk;
     }
 
+    // Log label for where a fetched TOML came from (RemoteToml::Result flags):
+    //   !fromCache                     -> "remote"          (cache miss, network hit)
+    //   fromCache && !cacheFallback    -> "cache hit"       (normal cache-first path)
+    //   fromCache && cacheFallback     -> "cache fallback"  (network failed, cache as plan B)
+    // cacheFallback without fromCache is inconsistent input; it is still "remote".
+    [[nodiscard]] constexpr const char* DescribeLoadSource(bool fromCache, bool cacheFallback) noexcept
+    {
+        if (!fromCache) return "remote";
+        return cacheFallback ? "cache fallback" : "cache hit";
+    }
+
 } // namespace RemoteTomlLogic

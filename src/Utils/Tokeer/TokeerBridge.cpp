@@ -17,6 +17,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <vector>
 
 // Code-server base URL, baked in at build time. Empty by default (Amethyst fork) so

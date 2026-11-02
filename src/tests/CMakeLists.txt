@@ -127,6 +127,8 @@ add_executable(AmethystToolTests
     remote_toml_logic_test.cpp
     pattern_loader_logic_test.cpp
     local_achievements_logic_test.cpp
+    remote_toml_load_source_test.cpp
+    forge_base_cache_test.cpp
 
     # Units under test, compiled directly (no OSTPlatform lib link) — see header.
     "${_ostp}/Numbers.cpp"

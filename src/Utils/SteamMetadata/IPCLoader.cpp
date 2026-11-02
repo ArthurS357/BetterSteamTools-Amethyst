@@ -3,6 +3,7 @@
 #include "OSTPlatform/include/Numbers.h"
 #include "Utils/Logging/Log.h"
 #include "Utils/SteamMetadata/RemoteToml.h"
+#include "Utils/SteamMetadata/RemoteTomlLogic.h"
 #include "Utils/SteamMetadata/SteamDiagnostics.h"
 
 #include <unordered_map>
@@ -189,7 +190,7 @@ bool Load(const std::string& steamclientPath)
 
     LOG_INFO("IPCLoader: loaded {} methods across {} interfaces ({})",
              MethodCount(), InterfaceCount(),
-             r.fromCache ? (r.cacheFallback ? "cache fallback" : "cache hit") : "remote");
+             RemoteTomlLogic::DescribeLoadSource(r.fromCache, r.cacheFallback));
     return true;
 }
 
