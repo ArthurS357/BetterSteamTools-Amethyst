@@ -266,16 +266,26 @@ struct RevalidationJob {
     std::vector<std::string> missing;     // required functions that failed to resolve
 };
 
-void TouchStamp(const std::filesystem::path& stampPath)
+// Writes the throttle stamp. Content is a fixed marker string: no SHA (that is
+// already the file NAME, same as the .toml beside it), no path, account or time.
+// Returns false if the stamp could not be persisted with a fresh mtime -- the
+// caller then skips the network, because without a stamp the 24h throttle would
+// degrade to "every launch" (and an unwritable dir couldn't take the new TOML anyway).
+bool TouchStamp(const std::filesystem::path& stampPath)
 {
     namespace fs = std::filesystem;
     std::error_code ec;
     fs::create_directories(stampPath.parent_path(), ec);
     {
         std::ofstream ofs(stampPath, std::ios::binary | std::ios::trunc);
-        if (ofs) ofs << "AmethystTool pattern cache revalidation stamp\n";
+        if (!ofs) return false;
+        ofs << "AmethystTool pattern cache revalidation stamp\n";
+        ofs.flush();
+        if (!ofs) return false;
     }
-    fs::last_write_time(stampPath, fs::file_time_type::clock::now(), ec);
+    std::error_code timeEc;
+    fs::last_write_time(stampPath, fs::file_time_type::clock::now(), timeEc);
+    return !timeEc;
 }
 
 // Runs on a detached worker thread, never on Steam's loader path.
@@ -310,7 +320,11 @@ void Revalidate(const RevalidationJob& job, bool enabled)
 
     // Stamp BEFORE the network: a timeout or crash still counts as an attempt,
     // so a mirror that simply lacks the function costs one request per interval.
-    TouchStamp(stampPath);
+    if (!TouchStamp(stampPath)) {
+        LOG_WARN("PatternLoader: {} revalidation skipped: could not write throttle stamp {}",
+                 job.info.component, OSTPlatform::Encoding::PathToUtf8(stampPath));
+        return;
+    }
     LOG_INFO("PatternLoader: {} cache has {} unresolved required function(s); "
              "checking mirrors for an updated TOML", job.info.component, job.missing.size());
 
@@ -369,8 +383,10 @@ bool Load(OSTPlatform::DynamicLibrary::ModuleHandle module, const std::string& d
         // Self-heal a corrupt cache entry: a cached file that parses to nothing
         // would otherwise fail every launch until the user deleted it by hand.
         // Treat it exactly like a cache miss (same synchronous mirror walk with
-        // the normal timeouts) and overwrite it only with a body that parses.
-        if (map.empty() && r.fromCache && !r.cacheFallback) {
+        // the normal timeouts, same request) and overwrite it only with a body
+        // that parses. Gated by [remote] revalidate like the background check,
+        // so revalidate = false restores the pre-v1.3.4 network behaviour exactly.
+        if (map.empty() && r.fromCache && !r.cacheFallback && Config::GetRemoteRevalidate()) {
             LOG_WARN("PatternLoader: cached TOML for {} is unusable ({}); re-downloading",
                      component, parseErr.empty() ? "no entries" : parseErr);
             RemoteToml::RemoteBody fresh = RemoteToml::FetchRemoteOnly(request, r.sha256, 5000, 10000);

@@ -225,5 +225,8 @@ enabled = false
 # cached file fails to resolve, AmethystTool re-checks the mirrors in the
 # background (short timeouts, at most once per 24h per file) and replaces the
 # cache only with a strictly better file, then asks you to restart Steam.
-# A healthy cache never causes a request. false = never revalidate.
+# A cached file that no longer parses is re-downloaded like a cache miss.
+# A healthy cache never causes a request; the request is the same one a cache
+# miss sends (DLL SHA-256 + component in the URL, nothing else).
+# false = never revalidate (exact pre-v1.3.4 network behaviour).
 # revalidate = true

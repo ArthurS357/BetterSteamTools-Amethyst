@@ -90,9 +90,22 @@ namespace Config {
 
     // [remote] — one or more mirror templates, tried in order. Empty = built-in defaults.
     inline std::vector<std::string> remoteUrlTemplates;
-    // [remote] revalidate — re-download a CACHED pattern TOML only when a required
-    // function from it failed to resolve (at most once per 24h per file). A healthy
-    // cache never triggers a request. false = never revalidate (pre-v1.3.4).
+    // [remote] revalidate — self-healing pattern cache (v1.3.4).
+    //
+    // revalidate = true by default:
+    // - Only triggers when a required pattern is missing from a cached TOML
+    //   (the same condition that already shows the "Missing Signatures" popup).
+    // - The only data sent is the DLL SHA-256 and component name, which are
+    //   already sent when the cache is empty (first run, after Steam update).
+    // - Rate-limited to one attempt per 24h per file.
+    // - Fails silently: if the network is down, the current cache is used.
+    // - Can be disabled with [remote] revalidate = false.
+    //
+    // Also gates re-downloading a cached TOML that no longer parses (treated
+    // exactly like a cache miss). The request is byte-for-byte the cache-miss
+    // request: GET <mirror>/pattern/<component>/<sha256>.toml with the same fixed
+    // User-Agent / Accept-Encoding every AmethystTool request carries -- no body,
+    // no cookies, no account, path or machine data. false = pre-v1.3.4 behaviour.
     inline bool remoteRevalidate = true;
 
     // [http] — empty = OSTPlatform::Http::kDefaultUserAgent ("OpenSteamTool/1.0",

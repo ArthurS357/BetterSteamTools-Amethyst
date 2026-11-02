@@ -16,7 +16,8 @@ Base: v1.3.3 (`e20ad7a`).
 
 - **`amethysttool://refreshachievements` remains dormant.** The URI scheme is registered only in builds configured with `-DOST_TOKEER_URL=...`; the default build does not register it (a registered protocol handler lets any web page launch the DLL via `rundll32`). Nothing changes for default builds.
 - **Forge base cache invalidates on account change.** The active user is re-read on each forge request; when it differs from the cached base's account, the cache is dropped and the base is re-resolved from the new account's `localconfig.vdf` (or the existing fallback probes).
-- **New config key `[remote] revalidate`** (default `true`). Network use is unchanged for a healthy cache; with a broken cached file there is at most one mirror check per file per 24 h. Set `false` to restore the pre-v1.3.4 behaviour exactly.
+- **`[remote] revalidate = true` by default.** Only triggers when the pattern cache is broken (missing required signature). No new data leaves the machine beyond the DLL SHA-256, which is already sent when the cache is empty. Can be disabled with `[remote] revalidate = false`.
+  - At most one mirror check per file per 24 h. A cached file that no longer parses is re-downloaded like a cache miss. Both behaviours are controlled by this key, so `false` restores the pre-v1.3.4 network behaviour exactly.
 - **Data races fixed** (RichPresence send/recv; achievements schema/held/pending queues). No behaviour or config changes; only synchronization.
 - No changes to `[donate]`, `[cache]` or `[manifest] url` defaults, and the depot-aware → gid-only fallback is untouched.
 
