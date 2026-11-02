@@ -1,4 +1,6 @@
 #pragma once
+#include <cstdint>
+#include <filesystem>
 #include <string>
 
 namespace RemoteToml {
@@ -19,5 +21,24 @@ namespace RemoteToml {
 
     // Read from local cache first; fetch remote only if missing.
     Result Fetch(const Request& request);
+
+    // <Steam>\amethysttool\<channel>\<component>\<sha256>.toml for this request.
+    std::filesystem::path CachePathFor(const Request& request, const std::string& sha256);
+
+    struct RemoteBody {
+        bool        ok = false;
+        std::string body;
+        std::string url;   // mirror that answered (or the last one tried)
+    };
+
+    // Walks the mirror chain for (request, sha256) WITHOUT reading or writing the
+    // cache, with caller-chosen (short) timeouts. Used by PatternLoader's
+    // background revalidation; never call it on Steam's loader path.
+    RemoteBody FetchRemoteOnly(const Request& request, const std::string& sha256,
+                               uint32_t timeoutMs, uint32_t recvTimeoutMs);
+
+    // Replaces cachePath atomically (temp file + MoveFileExW REPLACE_EXISTING).
+    // On failure the previous file is left untouched and false is returned.
+    bool ReplaceCacheFile(const std::filesystem::path& cachePath, const std::string& body);
 
 } // namespace RemoteToml

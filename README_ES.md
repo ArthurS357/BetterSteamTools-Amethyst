@@ -231,6 +231,8 @@ También puedes colocar manualmente un archivo TOML de patrones en el directorio
 
 > Se realiza una breve solicitud HTTPS saliente solo cuando no hay caché (una por cada DLL: `steamclient64.dll`, `steamui.dll`). Los cuerpos descargados son diminutos (~10 KB cada uno) y el proceso se ejecuta en un hilo secundario (worker thread), por lo que nunca bloquea el cargador de Steam.
 
+**Caché autorreparable (v1.3.4).** Si una función *requerida* de un TOML en caché no se resuelve (verías el aviso "Missing Signatures"), AmethystTool vuelve a consultar la cadena de espejos en un hilo secundario, con tiempos de espera cortos y como máximo una vez cada 24 horas por archivo. El archivo en caché solo se reemplaza si la descarga se analiza correctamente, conserva todas las funciones del archivo anterior y resuelve al menos una función faltante; después se te pide reiniciar Steam. Un archivo en caché que no se puede analizar se vuelve a descargar como si no hubiera caché. Una caché sana nunca genera solicitudes. Se desactiva con `[remote] revalidate = false`.
+
 #### Uso de un espejo (mirror) diferente
 
 Para la mayoría de los usuarios, la alternativa integrada de **GitHub -> jsDelivr** es suficiente. Si deseas utilizar un espejo privado o un servidor de intranet, configura una plantilla de URL completa. Un espejo personalizado reemplazará las fuentes remotas integradas; la alternativa de la caché local seguirá estando disponible.

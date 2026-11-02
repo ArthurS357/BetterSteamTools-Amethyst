@@ -110,6 +110,11 @@ static uint32_t InitThread(OSTPlatform::DynamicLibrary::ModuleHandle selfModule)
     // Surface any functions that FindPattern() could not locate.
     PatternLoader::ReportMissingFunctions();
 
+    // If a cached pattern TOML just left required hooks unresolved, check (in the
+    // background, throttled) whether the mirror now has a fixed file for this
+    // exact Steam build. No-op for a healthy cache. See PatternRefreshLogic.h.
+    PatternLoader::StartCacheRevalidation();
+
     // Optional Steam Cloud save redirection (CloudRedirect). No-op unless
     // [cloud].enabled is set and cloud_redirect.dll is present.
     CloudRedirectHost::Initialize(SteamInstallPath);

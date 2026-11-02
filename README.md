@@ -40,7 +40,7 @@ AmethystTool is a privacy-hardened fork of OpenSteamTools. Behavioural differenc
 
 - **Self-update is disabled and compiled out.** Upstream downloaded a replacement DLL on startup and overwrote itself in place, verifying integrity only against a hash served by the same channel — so whoever controlled a mirror controlled the code that ran on your machine (a remote-code-execution vector), and the fork stayed tethered to upstream infrastructure. The Amethyst build removes this path entirely; the `[update] enabled` key is still parsed for config compatibility but has no effect. (Rebuild with `OST_ENABLE_AUTOUPDATE` defined to restore the old behaviour.)
 - **Telemetry is off by default.** The stats API (`https://stats.opensteamtool.com/{appid}`, which reveals which apps you launch) is opt-in: `[stats] enable_api = false` unless you turn it on.
-- **Resilient local cache.** [Pattern lookup](#steam-version-compatibility) reads a local cache under `<Steam>\amethysttool\` first and only consults the steam-monitor trackers on a cache miss (typically after a Steam update).
+- **Resilient local cache.** [Pattern lookup](#steam-version-compatibility) reads a local cache under `<Steam>\amethysttool\` first and only consults the steam-monitor trackers on a cache miss (typically after a Steam update) — or, throttled to once a day, when a cached file leaves required hooks unresolved ([self-healing cache](#steam-version-compatibility)).
 - **Renamed surface.** The DLL is `AmethystTool.dll` and the config file is `amethysttool.toml`. Settings from a pre-rename `opensteamtool.toml` are migrated automatically on first launch — see [Config migration](#config-migration).
 
 > **Test in an isolated environment before using on your main account.** Injecting into Steam carries account risk that is entirely yours — see [TESTING.md](TESTING.md).
@@ -314,6 +314,8 @@ The IPC spec popup (`ipc` channel) points to the actively maintained mirror: <ht
 You can also drop a pattern TOML into the cache directory manually if you know the layout for a given build; the file name must be `<sha256>.toml`. It is used on the next launch, before any mirror is contacted.
 
 > A short outbound HTTPS request is performed only on a cache miss (one per DLL: `steamclient64.dll`, `steamui.dll`). The downloaded bodies are tiny (~10 KB each) and the work runs on a worker thread, so it never blocks Steam's loader.
+
+**Self-healing cache (v1.3.4).** A mirror sometimes fixes a TOML for a build that is already cached (adds a missing function or corrects a signature). Previously the cache never noticed and you had to delete `<Steam>\amethysttool\pattern` by hand. Now, if a *required* function from a cached file fails to resolve (you'd see the "Missing Signatures" popup), AmethystTool re-checks the mirror chain on a background thread with short timeouts, at most once per 24 hours per file. The cached file is replaced only when the download parses, keeps every function the old file had, and resolves at least one missing function; you're then asked to restart Steam. A cache that parses to nothing is re-downloaded like a cache miss. A healthy cache never triggers a request. Disable with `[remote] revalidate = false`.
 
 #### Using a different mirror
 

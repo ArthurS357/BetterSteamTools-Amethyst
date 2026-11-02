@@ -23,6 +23,7 @@ namespace {
         std::string logDir;
         std::vector<std::string> luaPaths;
         std::vector<std::string> remoteUrlTemplates;
+        bool remoteRevalidate = true;
         // Empty = OSTPlatform::Http::kDefaultUserAgent ("OpenSteamTool/1.0").
         std::string httpUserAgent;
         // Privacy/independence defaults (Amethyst fork): both OFF by default.
@@ -80,6 +81,7 @@ namespace {
         logDir                 = snapshot.logDir;
         luaPaths               = snapshot.luaPaths;
         remoteUrlTemplates     = snapshot.remoteUrlTemplates;
+        remoteRevalidate       = snapshot.remoteRevalidate;
         httpUserAgent          = snapshot.httpUserAgent;
         statsEnableApi         = snapshot.statsEnableApi;
         updateEnabled          = snapshot.updateEnabled;
@@ -192,6 +194,9 @@ namespace {
                     }
                 } else if (auto val = (*remote)["url_template"].value<std::string>()) {
                     snapshot.remoteUrlTemplates.push_back(*val);
+                }
+                if (auto val = (*remote)["revalidate"].value<bool>()) {
+                    snapshot.remoteRevalidate = *val;
                 }
             }
 
@@ -343,6 +348,11 @@ namespace {
     std::vector<std::string> GetRemoteUrlTemplates() {
         std::lock_guard lock(g_mutex);
         return remoteUrlTemplates;
+    }
+
+    bool GetRemoteRevalidate() {
+        std::lock_guard lock(g_mutex);
+        return remoteRevalidate;
     }
 
     std::string GetHttpUserAgent() {

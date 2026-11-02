@@ -205,12 +205,19 @@ namespace AppTicket {
         const auto tryAppId = [&](AppId_t id) -> bool {
             if (id == 0) return false;
             std::vector<uint8_t> ticket = Hooks_Decryption::GetCacheAppOwnershipTicket(id);
-            if (IsValidSourceTicket(ticket)) {
-                pick.appId = id;
-                pick.data = std::move(ticket);
-                return true;
+            if (!IsValidSourceTicket(ticket)) return false;
+            // Same rule as the localconfig base: a ticket issued to another account
+            // (left in the ConfigStore by a previous login, or a family-shared game)
+            // would hand the forged ticket the wrong SteamID -> error 54. When the
+            // active account is unknown (0) the check cannot be made; keep the
+            // pre-v1.3.4 behaviour and accept it.
+            if (!ForgeBaseCache::TicketBelongsToAccount(ExtractSteamIdFromTicketBytes(ticket), accountId)) {
+                LOG_DEBUG("PickForgeSourceTicket: skip fallback appid {} (ticket issued to another account)", id);
+                return false;
             }
-            return false;
+            pick.appId = id;
+            pick.data = std::move(ticket);
+            return true;
         };
 
         if (tryAppId(kPrimaryAppTicketSourceAppId)) return pick;

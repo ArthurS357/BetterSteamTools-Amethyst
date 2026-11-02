@@ -65,6 +65,7 @@ namespace Config {
     std::string GetLogDir();
     std::vector<std::string> GetLuaPaths();
     std::vector<std::string> GetRemoteUrlTemplates();
+    bool GetRemoteRevalidate();
     std::string GetHttpUserAgent();
     CloudSettings GetCloudSettings();
     CacheSettings GetCacheSettings();
@@ -89,6 +90,10 @@ namespace Config {
 
     // [remote] — one or more mirror templates, tried in order. Empty = built-in defaults.
     inline std::vector<std::string> remoteUrlTemplates;
+    // [remote] revalidate — re-download a CACHED pattern TOML only when a required
+    // function from it failed to resolve (at most once per 24h per file). A healthy
+    // cache never triggers a request. false = never revalidate (pre-v1.3.4).
+    inline bool remoteRevalidate = true;
 
     // [http] — empty = OSTPlatform::Http::kDefaultUserAgent ("OpenSteamTool/1.0",
     // the value manifest.opensteamtool.com's WAF allowlists).

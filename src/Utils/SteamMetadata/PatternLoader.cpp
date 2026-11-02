@@ -1,16 +1,25 @@
 #include "PatternLoader.h"
+#include "OSTPlatform/include/Dialog.h"
 #include "OSTPlatform/include/Encoding.h"
 #include "OSTPlatform/include/Memory.h"
 #include "OSTPlatform/include/Numbers.h"
+#include "Utils/Config/Config.h"
 #include "Utils/Logging/Log.h"
 #include "Utils/SteamMetadata/PatternLoaderLogic.h"
+#include "Utils/SteamMetadata/PatternRefreshLogic.h"
 #include "Utils/SteamMetadata/RemoteToml.h"
 #include "Utils/SteamMetadata/RemoteTomlLogic.h"
 #include "Utils/SteamMetadata/SteamDiagnostics.h"
 #include "Utils/Support/FnvHash.h"
 
+#include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <filesystem>
+#include <fstream>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -141,6 +150,60 @@ static PatternMap ParsePatternString(std::string_view body,
     }
 }
 
+static std::unordered_set<uint32_t> KeysOf(const PatternMap& map)
+{
+    std::unordered_set<uint32_t> keys;
+    keys.reserve(map.size());
+    for (const auto& [key, entry] : map) keys.insert(key);
+    return keys;
+}
+
+// Resolves funcName against an explicit pattern map: RVA first, then signature
+// scan. verbose=false is used when probing a candidate (not yet active) map
+// during cache revalidation, so a miss there doesn't read like a live failure.
+static void* LookupInMap(OSTPlatform::DynamicLibrary::ModuleHandle module,
+                         const PatternMap& map, const char* funcName, bool verbose)
+{
+    const uint32_t key = Fnv1aHash(funcName);
+    auto entryIt = map.find(key);
+    if (entryIt == map.end()) {
+        if (verbose) LOG_WARN("PatternLoader: no entry for '{}' (key=0x{:08X})", funcName, key);
+        return nullptr;
+    }
+
+    const PatternEntry& entry = entryIt->second;
+
+    // Priority 1: RVA direct offset
+    if (entry.rva != 0) {
+        void* addr = reinterpret_cast<void*>(
+            reinterpret_cast<uintptr_t>(module) + entry.rva);
+        if (verbose) LOG_DEBUG("PatternLoader: {} resolved via RVA 0x{:X}", funcName, entry.rva);
+        return addr;
+    }
+
+    // Priority 2: byte-signature scan
+    if (!entry.sig.empty()) {
+        std::vector<uint8_t> bytes, mask;
+        if (ParseSig(entry.sig, bytes, mask)) {
+            void* addr = ScanModule(module, bytes, mask);
+            if (addr) {
+                [[maybe_unused]] uintptr_t rva = reinterpret_cast<uintptr_t>(addr) -
+                                reinterpret_cast<uintptr_t>(module);
+                if (verbose) LOG_DEBUG("PatternLoader: {} resolved via sig @ RVA 0x{:X}", funcName, rva);
+                return addr;
+            }
+            if (verbose) LOG_WARN("PatternLoader: sig scan miss for '{}' (pattern parsed OK, "
+                                  "no match in module image)", funcName);
+        } else if (verbose) {
+            LOG_WARN("PatternLoader: malformed sig for '{}': '{}'", funcName, entry.sig);
+        }
+    } else if (verbose) {
+        LOG_WARN("PatternLoader: entry for '{}' has neither rva nor sig", funcName);
+    }
+
+    return nullptr;
+}
+
 // ---- popup helpers (detached threads so we never block Steam) ----
 
 // Surface a missing pattern file to the user, with enough detail to either
@@ -173,24 +236,175 @@ namespace PatternLoader {
 
     constexpr const char* kPatternChannel = "pattern";
 
-bool Load(OSTPlatform::DynamicLibrary::ModuleHandle module, const std::string& dllPath, const std::string& component)
+namespace {
+
+// ---- self-healing cache revalidation (v1.3.4) ----
+// Policy and rationale: Utils/SteamMetadata/PatternRefreshLogic.h.
+
+using ModuleHandle = OSTPlatform::DynamicLibrary::ModuleHandle;
+
+struct LoadInfo {
+    std::string dllPath;
+    std::string component;
+    std::string sha256;
+    bool        fromCache     = false;
+    bool        cacheFallback = false;
+    std::string cachedBody;   // kept only for a cache hit; revalidation diffs against it
+};
+
+// Guards g_loadInfo and g_requiredMisses. FindPattern normally runs on the init
+// thread, but some RESOLVE_FUNC lookups happen lazily on Steam threads.
+std::mutex g_revalidateMutex;
+std::unordered_map<ModuleHandle, LoadInfo> g_loadInfo;
+std::unordered_map<ModuleHandle, std::vector<std::string>> g_requiredMisses;
+std::atomic<bool> g_revalidationStarted{ false };
+
+struct RevalidationJob {
+    ModuleHandle             module = nullptr;
+    LoadInfo                 info;
+    PatternMap               cachedMap;   // snapshot; the worker never touches g_moduleMaps
+    std::vector<std::string> missing;     // required functions that failed to resolve
+};
+
+void TouchStamp(const std::filesystem::path& stampPath)
 {
     namespace fs = std::filesystem;
+    std::error_code ec;
+    fs::create_directories(stampPath.parent_path(), ec);
+    {
+        std::ofstream ofs(stampPath, std::ios::binary | std::ios::trunc);
+        if (ofs) ofs << "AmethystTool pattern cache revalidation stamp\n";
+    }
+    fs::last_write_time(stampPath, fs::file_time_type::clock::now(), ec);
+}
 
+// Runs on a detached worker thread, never on Steam's loader path.
+void Revalidate(const RevalidationJob& job, bool enabled)
+{
+    namespace fs = std::filesystem;
+    using namespace PatternRefreshLogic;
+
+    const RemoteToml::Request request{ kPatternChannel, job.info.component, job.info.dllPath };
+    const fs::path cachePath = RemoteToml::CachePathFor(request, job.info.sha256);
+    const fs::path stampPath = cachePath.parent_path() /
+                               OSTPlatform::Encoding::Utf8ToPath(StampFileName(job.info.sha256));
+
+    RevalidateInputs in;
+    in.enabled        = enabled;
+    in.fromCache      = job.info.fromCache;
+    in.cacheFallback  = job.info.cacheFallback;
+    in.requiredMisses = job.missing.size();
+    std::error_code ec;
+    const fs::file_time_type stamped = fs::last_write_time(stampPath, ec);
+    if (!ec) {
+        in.sinceLastAttempt = std::chrono::duration_cast<std::chrono::seconds>(
+            fs::file_time_type::clock::now() - stamped);
+    }
+
+    const Decision decision = ShouldRevalidate(in);
+    if (decision != Decision::Revalidate) {
+        LOG_INFO("PatternLoader: {} has {} unresolved required function(s); cache revalidation skipped ({})",
+                 job.info.component, job.missing.size(), ToString(decision));
+        return;
+    }
+
+    // Stamp BEFORE the network: a timeout or crash still counts as an attempt,
+    // so a mirror that simply lacks the function costs one request per interval.
+    TouchStamp(stampPath);
+    LOG_INFO("PatternLoader: {} cache has {} unresolved required function(s); "
+             "checking mirrors for an updated TOML", job.info.component, job.missing.size());
+
+    const RemoteToml::RemoteBody remote = RemoteToml::FetchRemoteOnly(
+        request, job.info.sha256, kRevalidateTimeoutMs, kRevalidateRecvTimeoutMs);
+    if (!remote.ok) {
+        LOG_INFO("PatternLoader: {} revalidation: no mirror answered; keeping cache", job.info.component);
+        return;
+    }
+
+    std::string parseErr;
+    const PatternMap remoteMap = ParsePatternString(remote.body, &parseErr);
+    size_t resolved = 0;
+    for (const std::string& name : job.missing)
+        if (LookupInMap(job.module, remoteMap, name.c_str(), /*verbose=*/false)) ++resolved;
+
+    const bool differs = remote.body != job.info.cachedBody;
+    if (!ShouldReplaceCache(KeysOf(job.cachedMap), KeysOf(remoteMap), differs, resolved)) {
+        LOG_INFO("PatternLoader: {} revalidation: mirror copy is not an improvement "
+                 "(differs={} entries={} resolves {}/{} missing{}{}); keeping cache",
+                 job.info.component, differs, remoteMap.size(), resolved, job.missing.size(),
+                 parseErr.empty() ? "" : ", parse error: ", parseErr);
+        return;
+    }
+
+    if (!RemoteToml::ReplaceCacheFile(cachePath, remote.body)) {
+        LOG_WARN("PatternLoader: {} revalidation: could not write the updated cache file",
+                 job.info.component);
+        return;
+    }
+
+    // Hooks were already installed (or skipped) from the old file, so the new one
+    // takes effect on the next Steam start -- swapping live hooks is not worth the risk.
+    LOG_INFO("PatternLoader: {} cache updated from {} ({}/{} missing function(s) now resolve); "
+             "restart Steam to apply", job.info.component, remote.url, resolved, job.missing.size());
+    OSTPlatform::Dialog::ShowInfo(
+        "AmethystTool - Signatures Updated",
+        "AmethystTool downloaded an updated signature file for " + job.info.component + ".\n\n" +
+        std::to_string(resolved) + " of " + std::to_string(job.missing.size()) +
+        " missing function(s) can now be located.\n\n"
+        "Restart Steam to apply it.");
+}
+
+} // namespace
+
+bool Load(OSTPlatform::DynamicLibrary::ModuleHandle module, const std::string& dllPath, const std::string& component)
+{
     // Delegate fetch + cache + mirror fallback to RemoteToml.
-    RemoteToml::Result r = RemoteToml::Fetch({
-        kPatternChannel,
-        component,
-        dllPath,
-    });
+    const RemoteToml::Request request{ kPatternChannel, component, dllPath };
+    RemoteToml::Result r = RemoteToml::Fetch(request);
 
     if (r.ok) {
         std::string parseErr;
         PatternMap map = ParsePatternString(r.body, &parseErr);
+
+        // Self-heal a corrupt cache entry: a cached file that parses to nothing
+        // would otherwise fail every launch until the user deleted it by hand.
+        // Treat it exactly like a cache miss (same synchronous mirror walk with
+        // the normal timeouts) and overwrite it only with a body that parses.
+        if (map.empty() && r.fromCache && !r.cacheFallback) {
+            LOG_WARN("PatternLoader: cached TOML for {} is unusable ({}); re-downloading",
+                     component, parseErr.empty() ? "no entries" : parseErr);
+            RemoteToml::RemoteBody fresh = RemoteToml::FetchRemoteOnly(request, r.sha256, 5000, 10000);
+            if (fresh.ok) {
+                std::string freshErr;
+                PatternMap freshMap = ParsePatternString(fresh.body, &freshErr);
+                if (!freshMap.empty()) {
+                    if (!RemoteToml::ReplaceCacheFile(RemoteToml::CachePathFor(request, r.sha256), fresh.body))
+                        LOG_WARN("PatternLoader: could not overwrite the corrupt cache file for {}", component);
+                    map = std::move(freshMap);
+                    r.body = std::move(fresh.body);
+                    r.fromCache = false;
+                } else {
+                    LOG_WARN("PatternLoader: re-downloaded TOML for {} is unusable too ({})",
+                             component, freshErr.empty() ? "no entries" : freshErr);
+                }
+            }
+        }
+
         if (!map.empty()) {
             LOG_INFO("PatternLoader: loaded {} patterns for {} ({})",
                      map.size(), component,
                      RemoteTomlLogic::DescribeLoadSource(r.fromCache, r.cacheFallback));
+            {
+                std::lock_guard<std::mutex> lock(g_revalidateMutex);
+                LoadInfo info;
+                info.dllPath       = dllPath;
+                info.component     = component;
+                info.sha256        = r.sha256;
+                info.fromCache     = r.fromCache;
+                info.cacheFallback = r.cacheFallback;
+                if (r.fromCache && !r.cacheFallback) info.cachedBody = r.body;
+                g_loadInfo[module] = std::move(info);
+            }
             g_moduleMaps[module] = std::move(map);
             return true;
         }
@@ -218,8 +432,6 @@ namespace {
 // Logs why a lookup failed; recording it as "missing" is the caller's call.
 void* Lookup(OSTPlatform::DynamicLibrary::ModuleHandle module, const char* funcName)
 {
-    uint32_t key = Fnv1aHash(funcName);
-
     auto mapIt = g_moduleMaps.find(module);
     if (mapIt == g_moduleMaps.end()) {
         // Load() was never called for this module.
@@ -228,46 +440,7 @@ void* Lookup(OSTPlatform::DynamicLibrary::ModuleHandle module, const char* funcN
         return nullptr;
     }
 
-    auto& map = mapIt->second;
-    auto entryIt = map.find(key);
-    if (entryIt == map.end()) {
-        LOG_WARN("PatternLoader: no entry for '{}' (key=0x{:08X})", funcName, key);
-        return nullptr;
-    }
-
-    const PatternEntry& entry = entryIt->second;
-
-    // Priority 1: RVA direct offset
-    if (entry.rva != 0) {
-        void* addr = reinterpret_cast<void*>(
-            reinterpret_cast<uintptr_t>(module) + entry.rva);
-        LOG_DEBUG("PatternLoader: {} resolved via RVA 0x{:X}", funcName, entry.rva);
-        return addr;
-    }
-
-    // Priority 2: byte-signature scan
-    if (!entry.sig.empty()) {
-        std::vector<uint8_t> bytes, mask;
-        if (ParseSig(entry.sig, bytes, mask)) {
-            void* addr = ScanModule(module, bytes, mask);
-            if (addr) {
-                [[maybe_unused]] uintptr_t rva = reinterpret_cast<uintptr_t>(addr) -
-                                reinterpret_cast<uintptr_t>(module);
-                LOG_DEBUG("PatternLoader: {} resolved via sig @ RVA 0x{:X}",
-                          funcName, rva);
-                return addr;
-            }
-            LOG_WARN("PatternLoader: sig scan miss for '{}' (pattern parsed OK, "
-                     "no match in module image)", funcName);
-        } else {
-            LOG_WARN("PatternLoader: malformed sig for '{}': '{}'",
-                     funcName, entry.sig);
-        }
-    } else {
-        LOG_WARN("PatternLoader: entry for '{}' has neither rva nor sig", funcName);
-    }
-
-    return nullptr;
+    return LookupInMap(module, mapIt->second, funcName, /*verbose=*/true);
 }
 
 void* Find(OSTPlatform::DynamicLibrary::ModuleHandle module, const char* funcName,
@@ -281,8 +454,16 @@ void* Find(OSTPlatform::DynamicLibrary::ModuleHandle module, const char* funcNam
         return nullptr;
     }
 
-    return PatternLoaderLogic::ResolveOrRecord(funcName, req, g_missingFunctions,
-                                               [module, funcName] { return Lookup(module, funcName); });
+    void* addr = PatternLoaderLogic::ResolveOrRecord(funcName, req, g_missingFunctions,
+                                                     [module, funcName] { return Lookup(module, funcName); });
+    // Remember which module a REQUIRED miss belongs to: that is the only signal
+    // that makes StartCacheRevalidation() look at the network (optional misses
+    // never do -- many builds legitimately lack optional functions).
+    if (!addr && req == PatternLoaderLogic::Requirement::Required) {
+        std::lock_guard<std::mutex> lock(g_revalidateMutex);
+        g_requiredMisses[module].emplace_back(funcName);
+    }
+    return addr;
 }
 
 } // namespace
@@ -317,6 +498,40 @@ void ReportMissingFunctions()
         list +
         "\nHooks for these functions are disabled for this session.\n\n"
         "See the AmethystTool README for how to report this.");
+}
+
+void StartCacheRevalidation()
+{
+    if (g_revalidationStarted.exchange(true)) return;   // once per process
+
+    const bool enabled = Config::GetRemoteRevalidate();
+    std::vector<RevalidationJob> jobs;
+    {
+        std::lock_guard<std::mutex> lock(g_revalidateMutex);
+        for (const auto& [module, info] : g_loadInfo) {
+            auto missIt = g_requiredMisses.find(module);
+            if (missIt == g_requiredMisses.end() || missIt->second.empty())
+                continue;   // healthy module: no request, no log noise
+            // g_moduleMaps is written only by Load() on the init thread, which is
+            // also the caller here, so this read cannot race a write.
+            auto mapIt = g_moduleMaps.find(module);
+            if (mapIt == g_moduleMaps.end()) continue;
+
+            RevalidationJob job;
+            job.module    = module;
+            job.info      = info;
+            job.cachedMap = mapIt->second;
+            job.missing   = missIt->second;
+            std::sort(job.missing.begin(), job.missing.end());
+            job.missing.erase(std::unique(job.missing.begin(), job.missing.end()), job.missing.end());
+            jobs.push_back(std::move(job));
+        }
+    }
+    if (jobs.empty()) return;
+
+    std::thread([jobs = std::move(jobs), enabled]() {
+        for (const RevalidationJob& job : jobs) Revalidate(job, enabled);
+    }).detach();
 }
 
 } // namespace PatternLoader

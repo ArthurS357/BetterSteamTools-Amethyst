@@ -16,6 +16,19 @@
 
 namespace ForgeBaseCache {
 
+    // True if a ticket carrying ticketSteamId may serve as a forge base for the
+    // active account. The account id is the low 32 bits of a SteamID64. When the
+    // active account is unknown (activeAccountId == 0) the check cannot be made
+    // and the ticket is accepted (pre-v1.3.4 behaviour for the fallback probes).
+    // A ticket whose SteamID could not be read (0) is rejected when the account
+    // IS known.
+    [[nodiscard]] constexpr bool TicketBelongsToAccount(uint64_t ticketSteamId,
+                                                        uint32_t activeAccountId) noexcept
+    {
+        if (activeAccountId == 0) return true;
+        return static_cast<uint32_t>(ticketSteamId & 0xFFFFFFFFull) == activeAccountId;
+    }
+
     template <typename T>
     class AccountKeyedCache {
     public:

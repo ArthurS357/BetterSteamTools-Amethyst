@@ -121,3 +121,26 @@ TEST(ForgeBaseCache, NoActiveUserYieldsNothingAndClearsStaleEntry) {
     EXPECT_TRUE(Pick(c, 0, kTicketA, resolves).empty());
     EXPECT_FALSE(c.HasValue());
 }
+
+// ── TicketBelongsToAccount (fallback-probe filter, v1.3.4) ───────
+
+TEST(ForgeBaseTicketOwnership, MatchesLow32BitsOfSteamId) {
+    constexpr uint64_t kSteamIdA = 0x0110000100000000ull | kAcctA;   // individual, public universe
+    static_assert(ForgeBaseCache::TicketBelongsToAccount(kSteamIdA, kAcctA));
+    EXPECT_TRUE(ForgeBaseCache::TicketBelongsToAccount(kSteamIdA, kAcctA));
+}
+
+TEST(ForgeBaseTicketOwnership, RejectsAnotherAccountsTicket) {
+    constexpr uint64_t kSteamIdB = 0x0110000100000000ull | kAcctB;
+    EXPECT_FALSE(ForgeBaseCache::TicketBelongsToAccount(kSteamIdB, kAcctA));
+}
+
+TEST(ForgeBaseTicketOwnership, UnknownActiveAccountAcceptsAnyTicket) {
+    // Pre-v1.3.4 behaviour is kept when the active user cannot be read.
+    EXPECT_TRUE(ForgeBaseCache::TicketBelongsToAccount(0x0110000100000000ull | kAcctB, 0));
+    EXPECT_TRUE(ForgeBaseCache::TicketBelongsToAccount(0, 0));
+}
+
+TEST(ForgeBaseTicketOwnership, UnreadableTicketSteamIdIsRejectedForKnownAccount) {
+    EXPECT_FALSE(ForgeBaseCache::TicketBelongsToAccount(0, kAcctA));
+}

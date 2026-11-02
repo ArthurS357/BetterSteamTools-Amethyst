@@ -1430,8 +1430,11 @@ namespace Hooks_NetPacket_RichPresence {
         if (appid) {
             entry->set_game_played_app_id(appid);
             entry->set_gameid(static_cast<uint64>(appid));
-            std::string name = Hooks_Misc::GetGameNameByAppID(appid);
-            if (!name.empty()) entry->set_game_name(name);
+            // Cache-only: we hold g_RPMutex here, and a cache miss would call into
+            // Steam's AppInfo cache (unknown internal locks -> lock-order risk).
+            // TrackSend warms this entry before it ever sets g_PlayingAppId.
+            if (auto name = Hooks_Misc::TryGetCachedGameName(appid); name && !name->empty())
+                entry->set_game_name(*name);
             entry->clear_rich_presence();
             auto it = g_RPKvsByAppId.find(appid);
             const bool hasKvs = (it != g_RPKvsByAppId.end()) && !it->second.empty();
@@ -1540,6 +1543,11 @@ namespace Hooks_NetPacket_RichPresence {
         AppId_t newTracked = 0;
         if (topmost != 0 && topmost != kOnlineFixAppId && LuaConfig::HasDepot(topmost))
             newTracked = topmost;
+
+        // Resolve (and cache) the game name BEFORE taking g_RPMutex: ApplyGameFields
+        // only reads the cache, so Steam's AppInfo lookup never runs under our lock.
+        if (newTracked != 0)
+            (void)Hooks_Misc::GetGameNameByAppID(newTracked);
 
         uint32_t capturedAccountId = 0;   // CloudRedirectHost is called after unlocking
         AppId_t oldTracked = 0;
