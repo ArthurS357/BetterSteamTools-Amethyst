@@ -2,6 +2,9 @@
 
 #include "dllmain.h"
 
+#include <optional>
+#include <string>
+
 // Catch-all for lightweight info-capture int3 traps and launch-time rewrites
 // that don't fit a dedicated category — currently:
 //   * GetAppIDForCurrentPipe  -> captures the SteamEngine pointer
@@ -33,7 +36,13 @@ namespace Hooks_Misc {
     // otherwise fall back to GetAppIDForCurrentPipe().
     AppId_t ResolveAppId();
 
-    // Get localized game name via GetAppDataFromAppInfo (cached).
+    // Get localized game name via GetAppDataFromAppInfo (cached). May call into
+    // Steam's AppInfo cache on a miss, so do NOT call it while holding one of
+    // our own locks -- use TryGetCachedGameName there instead.
     std::string GetGameNameByAppID(AppId_t appId);
+
+    // Cache-only lookup: never calls into Steam. nullopt if the name was never
+    // resolved (an empty string means "resolved, but Steam had no name").
+    std::optional<std::string> TryGetCachedGameName(AppId_t appId);
 
 }

@@ -110,6 +110,11 @@ static uint32_t InitThread(OSTPlatform::DynamicLibrary::ModuleHandle selfModule)
     // Surface any functions that FindPattern() could not locate.
     PatternLoader::ReportMissingFunctions();
 
+    // If a cached pattern TOML just left required hooks unresolved, check (in the
+    // background, throttled) whether the mirror now has a fixed file for this
+    // exact Steam build. No-op for a healthy cache. See PatternRefreshLogic.h.
+    PatternLoader::StartCacheRevalidation();
+
     // Optional Steam Cloud save redirection (CloudRedirect). No-op unless
     // [cloud].enabled is set and cloud_redirect.dll is present.
     CloudRedirectHost::Initialize(SteamInstallPath);
@@ -127,6 +132,15 @@ static uint32_t InitThread(OSTPlatform::DynamicLibrary::ModuleHandle selfModule)
     // is configured with a Tokeer code server (OST_TOKEER_URL) — otherwise redemption is
     // inert (see TokeerBridge::Redeem) and registering the handler would just add attack
     // surface (a site-invocable protocol handler) with no corresponding feature enabled.
+    //
+    // Decision (v1.3.4 review): amethysttool://refreshachievements is DELIBERATELY left
+    // dormant in the default build. The handler is gated with the rest of the scheme
+    // because registering it makes ANY web page able to spawn rundll32 -> this DLL (and
+    // pop dialogs on malformed links) and, for valid links, delete cached achievement
+    // schema files -- while nothing in the default build links to it and the cache can be
+    // cleared by hand. appid validation (uint32, no traversal) is solid, but safe parsing
+    // does not justify new default attack surface.
+    // Builds that set OST_TOKEER_URL get the scheme, and with it refreshachievements.
 #if defined(OST_TOKEER_URL)
     TokeerBridge::RegisterUriScheme(std::string(SteamInstallPath) + "\\AmethystTool.dll");
 #else

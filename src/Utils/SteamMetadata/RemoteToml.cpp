@@ -1,3 +1,12 @@
+// L-3: trim <windows.h> and keep its min/max macros out of this TU. Defined
+// before ANY include so they also apply if a header pulls windows.h in first.
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+
 #include "RemoteToml.h"
 #include "OSTPlatform/include/Encoding.h"
 #include "OSTPlatform/include/Http.h"
@@ -6,10 +15,13 @@
 #include "Utils/SteamMetadata/RemoteTomlLogic.h"
 #include "Utils/SteamMetadata/SteamDiagnostics.h"
 
+#include <windows.h> // MoveFileExW, GetCurrentThreadId (ReplaceCacheFile)
+
 #include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -60,9 +72,8 @@ Result Fetch(const Request& request)
     // 2. Cache path & dir. request.dllPath is UTF-8 (SteamUIPath/SteamclientPath, built
     // from OSTPlatform::DynamicLibrary::GetCurrentDirectoryPath() in dllmain.cpp), so it
     // goes through Utf8ToPath rather than the ANSI-codepage path(std::string) constructor.
-    fs::path steamRoot = OSTPlatform::Encoding::Utf8ToPath(request.dllPath).parent_path();
-    fs::path cacheDir  = steamRoot / "amethysttool" / request.channel / request.component;
-    fs::path cachePath = cacheDir / (out.sha256 + ".toml");
+    fs::path cachePath = CachePathFor(request, out.sha256);
+    fs::path cacheDir  = cachePath.parent_path();
     // Log-only text -- the actual I/O below (fs::exists/ifstream/ofstream) uses the
     // cachePath/cacheDir fs::path objects directly, so this narrowing never touches disk.
     const std::string cachePathText = OSTPlatform::Encoding::PathToUtf8(cachePath);
@@ -166,6 +177,7 @@ Result Fetch(const Request& request)
                 out.body = std::move(buf);
                 out.ok = true;
                 out.fromCache = true;
+                out.cacheFallback = true;
                 return out;
             }
             LOG_WARN("RemoteToml({}/{}): cache file empty: {}",
@@ -181,6 +193,75 @@ Result Fetch(const Request& request)
              request.channel, request.component,
              lastUrl.empty() ? "<none>" : lastUrl, http.status);
     return out;
+}
+
+std::filesystem::path CachePathFor(const Request& request, const std::string& sha256)
+{
+    // request.dllPath is UTF-8 -> Utf8ToPath, never the ANSI path(std::string) ctor.
+    const std::filesystem::path steamRoot =
+        OSTPlatform::Encoding::Utf8ToPath(request.dllPath).parent_path();
+    return steamRoot / "amethysttool" / request.channel / request.component / (sha256 + ".toml");
+}
+
+RemoteBody FetchRemoteOnly(const Request& request, const std::string& sha256,
+                           uint32_t timeoutMs, uint32_t recvTimeoutMs, bool requireHttps)
+{
+    RemoteBody out;
+    if (sha256.empty()) return out;
+
+    const std::vector<std::string> urls = RemoteTomlLogic::BuildMirrorUrls(
+        BuildUrlTemplates(), request.channel, request.component, sha256);
+
+    for (const std::string& url : urls) {
+        if (requireHttps && !RemoteTomlLogic::IsHttpsUrl(url)) {
+            LOG_WARN("RemoteToml({}/{}): revalidation skips non-https mirror {}",
+                     request.channel, request.component, url);
+            continue;
+        }
+        out.url = url;
+        OSTPlatform::Http::Result http = OSTPlatform::Http::Execute(
+            L"GET", url.c_str(), nullptr, 0, nullptr,
+            timeoutMs, timeoutMs, timeoutMs, recvTimeoutMs);
+        if (RemoteTomlLogic::IsMirrorHit(http.ok, http.status) && !http.body.empty()) {
+            out.ok = true;
+            out.body = std::move(http.body);
+            return out;
+        }
+        LOG_DEBUG("RemoteToml({}/{}): revalidate mirror miss ({} ok={} HTTP={})",
+                  request.channel, request.component, url, http.ok, http.status);
+    }
+    return out;
+}
+
+bool ReplaceCacheFile(const std::filesystem::path& cachePath, const std::string& body)
+{
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    fs::create_directories(cachePath.parent_path(), ec);
+
+    // Temp file beside the target (same volume, so the rename is atomic), named
+    // per thread so two writers never share it. Native wide paths throughout.
+    const fs::path tmp = fs::path(cachePath).concat(
+        L"." + std::to_wstring(::GetCurrentThreadId()) + L".tmp");
+    {
+        std::ofstream ofs(tmp, std::ios::binary | std::ios::trunc);
+        if (!ofs) return false;
+        ofs.write(body.data(), static_cast<std::streamsize>(body.size()));
+        ofs.flush();
+        if (!ofs) {
+            ofs.close();
+            fs::remove(tmp, ec);
+            return false;
+        }
+    }
+    // WRITE_THROUGH (L-2): the call returns only after the rename is flushed to
+    // disk, so a power loss can't leave the directory entry pointing nowhere.
+    if (!::MoveFileExW(tmp.c_str(), cachePath.c_str(),
+                       MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+        fs::remove(tmp, ec);
+        return false;
+    }
+    return true;
 }
 
 } // namespace RemoteToml

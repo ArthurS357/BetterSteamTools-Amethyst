@@ -4,6 +4,7 @@
 #include "OSTPlatform/include/SteamCredentialStore.h"
 #include "Utils/Config/LuaConfig.h"
 #include "Utils/Logging/Log.h"
+#include "Utils/Tickets/ForgeBaseCache.h"
 #include "dllmain.h"
 
 #include <cctype>
@@ -81,17 +82,9 @@ namespace AppTicket {
     // the appid of the base is irrelevant, so the first valid one works for
     // every game. apptickets is a flat text-VDF block of "<appid>" "<hexticket>"
     // pairs.
-    static SourceTicket ReadLocalConfigSourceTicket() {
+    static SourceTicket ReadLocalConfigSourceTicket(uint32_t accountId) {
         SourceTicket pick;
-        if (!SteamInstallPath[0]) return pick;
-
-        uint32_t accountId = 0;
-        std::wstring universe;
-        if (OSTPlatform::SteamCredentialStore::GetActiveUser(accountId, universe)
-                != OSTPlatform::SteamCredentialStore::Status::Ok || accountId == 0) {
-            LOG_DEBUG("ReadLocalConfigSourceTicket: no active user");
-            return pick;
-        }
+        if (!SteamInstallPath[0] || accountId == 0) return pick;
 
         // SteamInstallPath is UTF-8; go through Utf8ToPath, not the ANSI-codepage
         // path(std::string) conversion ifstream(std::string) would use.
@@ -175,14 +168,38 @@ namespace AppTicket {
         // One valid base forges every appid, so resolve localconfig once and
         // keep it for the session. Cache only on success (retry until ready).
         // Callers arrive from several Steam threads, hence the mutex.
+        //
+        // The cache is keyed by the active account: the forged ticket inherits the
+        // base's SteamID, so a base resolved for account A must not be reused after
+        // switching to account B (or a Family Sharing session) without a Steam
+        // restart -- that would produce error 54. The active user is re-read on
+        // every call and the entry dropped whenever it changes.
         static std::mutex cacheMutex;
-        static SourceTicket cached;
+        static ForgeBaseCache::AccountKeyedCache<SourceTicket> cached;
+
+        uint32_t accountId = 0;
+        {
+            std::wstring universe;
+            if (OSTPlatform::SteamCredentialStore::GetActiveUser(accountId, universe)
+                    != OSTPlatform::SteamCredentialStore::Status::Ok) {
+                accountId = 0;
+            }
+        }
         {
             std::lock_guard lock(cacheMutex);
-            if (cached.appId != 0) return cached;
-            if (SourceTicket lc = ReadLocalConfigSourceTicket(); lc.appId != 0) {
-                cached = std::move(lc);
-                return cached;
+            if (cached.InvalidateIfAccountChanged(accountId)) {
+                LOG_INFO("PickForgeSourceTicket: active account changed to {}, forge base cache invalidated",
+                         accountId);
+            }
+            SourceTicket hit;
+            if (cached.Lookup(accountId, hit)) return hit;
+            if (accountId == 0) {
+                LOG_DEBUG("PickForgeSourceTicket: no active user, skipping localconfig base");
+            } else if (SourceTicket lc = ReadLocalConfigSourceTicket(accountId); lc.appId != 0) {
+                // Store only refuses accountId == 0, excluded by the branch above;
+                // a refusal would merely mean "re-read next call", so it is ignored.
+                (void)cached.Store(accountId, lc);
+                return lc;
             }
         }
 
@@ -190,12 +207,19 @@ namespace AppTicket {
         const auto tryAppId = [&](AppId_t id) -> bool {
             if (id == 0) return false;
             std::vector<uint8_t> ticket = Hooks_Decryption::GetCacheAppOwnershipTicket(id);
-            if (IsValidSourceTicket(ticket)) {
-                pick.appId = id;
-                pick.data = std::move(ticket);
-                return true;
+            if (!IsValidSourceTicket(ticket)) return false;
+            // Same rule as the localconfig base: a ticket issued to another account
+            // (left in the ConfigStore by a previous login, or a family-shared game)
+            // would hand the forged ticket the wrong SteamID -> error 54. When the
+            // active account is unknown (0) the check cannot be made; keep the
+            // pre-v1.3.4 behaviour and accept it.
+            if (!ForgeBaseCache::TicketBelongsToAccount(ExtractSteamIdFromTicketBytes(ticket), accountId)) {
+                LOG_DEBUG("PickForgeSourceTicket: skip fallback appid {} (ticket issued to another account)", id);
+                return false;
             }
-            return false;
+            pick.appId = id;
+            pick.data = std::move(ticket);
+            return true;
         };
 
         if (tryAppId(kPrimaryAppTicketSourceAppId)) return pick;

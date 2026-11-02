@@ -20,4 +20,12 @@ namespace PatternLoader {
     // Report unresolved required functions after all hooks have been installed.
     void ReportMissingFunctions();
 
+    // Self-healing cache refresh (v1.3.4). Call once, after hook install. For each
+    // module whose TOML came from the local cache AND had a required function fail
+    // to resolve, re-checks the mirror chain on a background thread (short
+    // timeouts, at most once per 24h per file, [remote] revalidate = false turns it
+    // off). The cache is replaced only by a strictly better TOML; the user is told
+    // to restart Steam. Healthy modules never cause a request. Non-blocking.
+    void StartCacheRevalidation();
+
 } // namespace PatternLoader

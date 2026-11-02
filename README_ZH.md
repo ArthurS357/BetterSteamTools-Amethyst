@@ -228,11 +228,17 @@ AmethystTool 不再在 DLL 中内置字节模式签名。相反，每次启动�
 
    在 `raw.githubusercontent.com` 被封锁的地区（如中国大陆），jsDelivr 很有用。成功获取的内容会写入缓存
 
+IPC 规格弹窗（`ipc` 通道）指向仍在积极维护的镜像：<https://github.com/madoiscool/steam-monitor/tree/ipc/steamclient>。
+
+> **`amethysttool://` URI 方案 — 默认休眠。** `amethysttool://redeem` 与 `amethysttool://refreshachievements[/<appid|all>]` 处理程序已实现，但仅当构建时设置 `-DOST_TOKEER_URL=...` 才会在 Windows 注册表中注册该方案。默认构建不注册，因为已注册的协议处理程序会让任意网页通过 `rundll32` 启动该 DLL。
+
 各镜像是覆盖范围不同的独立仓库，因此某个镜像返回 **404** 不会终止循环——会继续尝试下一个镜像。如果所有镜像都失败，出现一次性弹窗，显示不匹配的 DLL 名称、其 SHA-256、预期缓存路径和上游 URL。仅禁用与该 DLL 相关的钩子——AmethystTool 的其余部分继续工作
 
 如果你知道给定版本的布局，也可以手动将模式 TOML 放入缓存目录；文件名必须为 `<sha256>.toml`。下次启动时会在访问任何镜像之前使用它
 
 > 仅在缓存未命中时执行简短的出站 HTTPS 请求（每个 DLL 一个：`steamclient64.dll`、`steamui.dll`）。下载的内容很小（每个约 10 KB），工作在线程上运行，因此永远不会阻塞 Steam 加载器
+
+**自修复缓存（v1.3.4）。** 如果缓存的 TOML 中某个*必需*函数无法解析（会看到 "Missing Signatures" 弹窗），AmethystTool 会在后台线程中以较短的超时重新查询镜像链，每个文件每 24 小时最多一次。只有当下载内容能够解析、在已加载的 Steam 模块内至少解析出一个缺失函数、并且所有已正常工作的条目逐字节保持不变时，才会替换缓存文件。已有的特征码永远不会被修改，只会添加或修复缺失的部分。刷新只使用 `https://` 镜像。之后会提示重启 Steam。无法解析的缓存文件会像缓存未命中一样重新下载。健康的缓存永远不会触发请求，且该请求与缓存未命中时的请求完全相同（`GET …/pattern/<component>/<sha256>.toml`，无请求体，不含账户或设备数据）。`[remote] revalidate = false` 会同时关闭这两种行为
 
 #### 使用不同的镜像
 

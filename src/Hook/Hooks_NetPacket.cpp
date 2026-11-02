@@ -432,7 +432,7 @@ namespace Hooks_NetPacket_UserStats {
     // reply can mark each group achievable and emit each achievement under its
     // internal_key with the local unlock state looked up by name. In-memory
     // only, so after a Steam start the first user reply usually beats it --
-    // see g_HeldUserAch. RecvPkt thread only.
+    // see g_HeldUserAch. Guarded by g_AchMutex (see below).
     std::unordered_map<AppId_t, std::vector<uint32>> g_GameAchGroups;
     std::unordered_map<AppId_t, std::vector<std::pair<uint32, std::string>>> g_GameAchSchema;
 
@@ -440,7 +440,13 @@ namespace Hooks_NetPacket_UserStats {
     // (SLS's choke-and-queue). We keep the real header+body, pass the client a
     // copy aimed at a job nobody waits on (so it is dropped and the real job
     // stays pending), then deliver the rebuilt reply once the schema lands.
-    // Filled and drained only from the RecvPkt hook, so no lock.
+    // Normally touched only from the RecvPkt hook, but that single-thread
+    // assumption is not enforced anywhere, so g_AchMutex guards g_GameAchGroups,
+    // g_GameAchSchema, g_HeldUserAch and g_UserAchPending. Lock rules: never held
+    // together with g_JobMutex (job lookups finish first), and never held across
+    // the invokeOriginal call in DrainAchievements (it re-enters Steam's recv path).
+    // FillUserAchievements / QueueHeldUserAch expect the caller to hold it.
+    std::mutex g_AchMutex;
     struct HeldUserAch {
         AppId_t     appId;
         AccountID_t acct;
@@ -612,6 +618,8 @@ namespace Hooks_NetPacket_UserStats {
             if (a.has_internal_key() && a.has_internal_name())
                 schema.emplace_back(a.internal_key(), a.internal_name());
 
+        std::lock_guard ach(g_AchMutex);
+
         // A hash_only reply carries no achievements; don't let it wipe a good cache.
         if (schema.empty() && g_GameAchSchema.count(appId)) {
             LOG_ACHIEVEMENT_DEBUG("GetGameAchievements recv: app={} empty reply, keeping cached schema", appId);
@@ -653,6 +661,7 @@ namespace Hooks_NetPacket_UserStats {
         CPlayer_GetUserAchievements_Response resp;
         if (!resp.ParseFromArray(pBody, cbBody)) return;
 
+        std::lock_guard ach(g_AchMutex);
         size_t nUnlocked = 0;
         if (!FillUserAchievements(job.appId, job.acct, resp, nUnlocked)) {
             if (g_HeldUserAch.size() >= kMaxHeldUserAch) return;   // too many waiting; leave Valve's reply alone
@@ -690,14 +699,23 @@ namespace Hooks_NetPacket_UserStats {
                            bool (*invokeOriginal)(void*, CNetPacket*))
     {
         const auto now = std::chrono::steady_clock::now();
-        for (auto h = g_HeldUserAch.begin(); h != g_HeldUserAch.end();) {
-            if (now - h->at >= kHoldTimeout) { QueueHeldUserAch(*h); h = g_HeldUserAch.erase(h); }
-            else ++h;
+        {
+            std::lock_guard ach(g_AchMutex);
+            for (auto h = g_HeldUserAch.begin(); h != g_HeldUserAch.end();) {
+                if (now - h->at >= kHoldTimeout) { QueueHeldUserAch(*h); h = g_HeldUserAch.erase(h); }
+                else ++h;
+            }
         }
 
-        while (!g_UserAchPending.empty()) {
-            std::vector<uint8> pkt = std::move(g_UserAchPending.front());
-            g_UserAchPending.pop_front();
+        for (;;) {
+            std::vector<uint8> pkt;
+            {
+                // Pop under the lock, deliver outside it (invokeOriginal re-enters Steam).
+                std::lock_guard ach(g_AchMutex);
+                if (g_UserAchPending.empty()) break;
+                pkt = std::move(g_UserAchPending.front());
+                g_UserAchPending.pop_front();
+            }
 
             uint8* origData = NetPkt::Data(pCarrier);
             const uint32 origSize = NetPkt::Size(pCarrier);
@@ -1331,6 +1349,27 @@ namespace Hooks_NetPacket_Manifest {
 // ════════════════════════════════════════════════════════════════
 namespace Hooks_NetPacket_RichPresence {
 
+    // Thread model: TrackSend / TrackRPSend run in the send hook, HandleRecv /
+    // TryInject in the RecvPkt hook. They share everything below (playing appid,
+    // self SteamID, the cached self-PersonaState template, the manufactured
+    // inject packet and the per-app RP KVs), so g_RPMutex guards ALL of it.
+    // ApplyGameFields / BuildInject expect the caller to hold it. It is never held
+    // across CloudRedirectHost calls or oRecvPkt (invokeOriginal).
+    //
+    // LOCK HIERARCHY (v1.3.4) -- the single place this is written down:
+    //   g_RPMutex  ->  Hooks_Misc g_GameNameCacheMutex   (the ONLY nesting)
+    //     ApplyGameFields calls Hooks_Misc::TryGetCachedGameName under g_RPMutex;
+    //     g_GameNameCacheMutex is a leaf and never takes another lock nor calls
+    //     into Steam while held.
+    //   Independent leaves, never held together with any other of our locks:
+    //     Hooks_NetPacket_UserStats::g_JobMutex, Hooks_NetPacket_UserStats::g_AchMutex
+    //     (job lookups finish before g_AchMutex is taken), and AppTicket.cpp's
+    //     PickForgeSourceTicket cacheMutex (GetActiveUser runs before it, the
+    //     Hooks_Decryption fallback probes after it).
+    //   None of them is held across invokeOriginal, CloudRedirectHost::* or a
+    //   Steam AppInfo lookup. Adding a new nesting means updating this comment.
+    std::mutex g_RPMutex;
+
     AppId_t g_PlayingAppId = 0;
     uint64  g_LocalSteamId = 0;
 
@@ -1404,8 +1443,11 @@ namespace Hooks_NetPacket_RichPresence {
         if (appid) {
             entry->set_game_played_app_id(appid);
             entry->set_gameid(static_cast<uint64>(appid));
-            std::string name = Hooks_Misc::GetGameNameByAppID(appid);
-            if (!name.empty()) entry->set_game_name(name);
+            // Cache-only: we hold g_RPMutex here, and a cache miss would call into
+            // Steam's AppInfo cache (unknown internal locks -> lock-order risk).
+            // TrackSend warms this entry before it ever sets g_PlayingAppId.
+            if (auto name = Hooks_Misc::TryGetCachedGameName(appid); name && !name->empty())
+                entry->set_game_name(*name);
             entry->clear_rich_presence();
             auto it = g_RPKvsByAppId.find(appid);
             const bool hasKvs = (it != g_RPKvsByAppId.end()) && !it->second.empty();
@@ -1471,8 +1513,15 @@ namespace Hooks_NetPacket_RichPresence {
 
     // Decode outbound CMsgClientRichPresenceUpload into per-AppId KVs
     // and stage a fresh PersonaState inject.
+    AppId_t GetPlayingAppId()
+    {
+        std::lock_guard lk(g_RPMutex);
+        return g_PlayingAppId;
+    }
+
     void TrackRPSend(const uint8* pBody, uint32 cbBody)
     {
+        std::lock_guard lk(g_RPMutex);
         if (g_LocalSteamId == 0 || g_PlayingAppId == 0) return;
 
         CMsgClientRichPresenceUpload up;
@@ -1492,16 +1541,6 @@ namespace Hooks_NetPacket_RichPresence {
 
     void TrackSend(const CMsgClientGamesPlayed& msg, const uint8* pHdr, uint32 cbHdr)
     {
-        if (g_LocalSteamId == 0) {
-            CMsgProtoBufHeader hdr;
-            if (hdr.ParseFromArray(pHdr, cbHdr) && hdr.has_steamid() && hdr.steamid()) {
-                g_LocalSteamId = hdr.steamid();
-                LOG_RICHPRESENCE_DEBUG("Captured local SteamID 0x{:X}", g_LocalSteamId);
-                CloudRedirectHost::SetAccountId(
-                    static_cast<uint32_t>(g_LocalSteamId & 0xFFFFFFFF));
-            }
-        }
-
         // Steam stacks running games in games_played; the banner follows
         // the tail (most recently launched).  Mirror that — only the
         // tail's appid drives our inject.
@@ -1518,27 +1557,55 @@ namespace Hooks_NetPacket_RichPresence {
         if (topmost != 0 && topmost != kOnlineFixAppId && LuaConfig::HasDepot(topmost))
             newTracked = topmost;
 
-        if (g_PlayingAppId == newTracked) return;
-        AppId_t oldTracked = g_PlayingAppId;
-        g_PlayingAppId = newTracked;
-
-        if (oldTracked != 0)
-            CloudRedirectHost::NotifyAppRunning(oldTracked, false);
+        // Resolve (and cache) the game name BEFORE taking g_RPMutex: ApplyGameFields
+        // only reads the cache, so Steam's AppInfo lookup never runs under our lock.
         if (newTracked != 0)
-            CloudRedirectHost::NotifyAppRunning(newTracked, true);
+            (void)Hooks_Misc::GetGameNameByAppID(newTracked);
 
-        if (newTracked != 0) {
-            LOG_RICHPRESENCE_INFO("Tracking topmost appid {}", newTracked);
-            if (BuildInject(newTracked)) g_InjectPending = true;
-        } else if (topmost == 0) {
-            // Stack went empty — inject a clear so the cache reverts.
-            LOG_RICHPRESENCE_DEBUG("GamesPlayed empty, scheduling cache clear");
-            if (BuildInject(0)) g_InjectPending = true;
-        } else {
-            // Topmost is owned (or -onlinefix); let the server's broadcast
-            // paint it.  Skipping the clear-inject here avoids a brief
-            // "Online" flicker between our drop and the server's push.
-            LOG_RICHPRESENCE_DEBUG("Topmost is appid {} (owned or onlinefix); deferring to server", topmost);
+        uint32_t capturedAccountId = 0;   // CloudRedirectHost is called after unlocking
+        AppId_t oldTracked = 0;
+        {
+            std::lock_guard lk(g_RPMutex);
+
+            if (g_LocalSteamId == 0) {
+                CMsgProtoBufHeader hdr;
+                if (hdr.ParseFromArray(pHdr, cbHdr) && hdr.has_steamid() && hdr.steamid()) {
+                    g_LocalSteamId = hdr.steamid();
+                    LOG_RICHPRESENCE_DEBUG("Captured local SteamID 0x{:X}", g_LocalSteamId);
+                    capturedAccountId = static_cast<uint32_t>(g_LocalSteamId & 0xFFFFFFFF);
+                }
+            }
+
+            if (g_PlayingAppId == newTracked) {
+                // fallthrough to the SetAccountId call below
+                oldTracked = newTracked;
+            } else {
+                oldTracked = g_PlayingAppId;
+                g_PlayingAppId = newTracked;
+
+                if (newTracked != 0) {
+                    LOG_RICHPRESENCE_INFO("Tracking topmost appid {}", newTracked);
+                    if (BuildInject(newTracked)) g_InjectPending = true;
+                } else if (topmost == 0) {
+                    // Stack went empty — inject a clear so the cache reverts.
+                    LOG_RICHPRESENCE_DEBUG("GamesPlayed empty, scheduling cache clear");
+                    if (BuildInject(0)) g_InjectPending = true;
+                } else {
+                    // Topmost is owned (or -onlinefix); let the server's broadcast
+                    // paint it.  Skipping the clear-inject here avoids a brief
+                    // "Online" flicker between our drop and the server's push.
+                    LOG_RICHPRESENCE_DEBUG("Topmost is appid {} (owned or onlinefix); deferring to server", topmost);
+                }
+            }
+        }
+
+        if (capturedAccountId != 0)
+            CloudRedirectHost::SetAccountId(capturedAccountId);
+        if (oldTracked != newTracked) {
+            if (oldTracked != 0)
+                CloudRedirectHost::NotifyAppRunning(oldTracked, false);
+            if (newTracked != 0)
+                CloudRedirectHost::NotifyAppRunning(newTracked, true);
         }
     }
 
@@ -1549,6 +1616,8 @@ namespace Hooks_NetPacket_RichPresence {
     {
         CMsgClientPersonaState msg;
         if (!msg.ParseFromArray(pBody, cbBody)) return false;
+
+        std::lock_guard lk(g_RPMutex);
 
         CMsgClientPersonaState::Friend* selfEntry = nullptr;
         for (int i = 0; i < msg.friends_size(); ++i) {
@@ -1593,17 +1662,24 @@ namespace Hooks_NetPacket_RichPresence {
     void TryInject(void* pThis, CNetPacket* pCarrier,
                    bool (*invokeOriginal)(void*, CNetPacket*))
     {
-        if (!g_InjectPending || g_cbInjectPkt == 0) return;
-        g_InjectPending = false;
+        // Copy the packet out under the lock: the send hook may rebuild
+        // g_InjectPkt at any time, and invokeOriginal must run unlocked.
+        std::vector<uint8> pkt;
+        {
+            std::lock_guard lk(g_RPMutex);
+            if (!g_InjectPending || g_cbInjectPkt == 0) return;
+            g_InjectPending = false;
+            pkt.assign(g_InjectPkt, g_InjectPkt + g_cbInjectPkt);
+        }
 
         uint8* origData = NetPkt::Data(pCarrier);
         const uint32 origSize = NetPkt::Size(pCarrier);
-        NetPkt::Data(pCarrier) = g_InjectPkt;
-        NetPkt::Size(pCarrier) = g_cbInjectPkt;
+        NetPkt::Data(pCarrier) = pkt.data();
+        NetPkt::Size(pCarrier) = static_cast<uint32>(pkt.size());
         invokeOriginal(pThis, pCarrier);
         NetPkt::Data(pCarrier) = origData;
         NetPkt::Size(pCarrier) = origSize;
-        LOG_RICHPRESENCE_INFO("Delivered manufactured self-PersonaState ({} bytes)", g_cbInjectPkt);
+        LOG_RICHPRESENCE_INFO("Delivered manufactured self-PersonaState ({} bytes)", pkt.size());
     }
 
 } // namespace Hooks_NetPacket_RichPresence
@@ -2028,7 +2104,7 @@ namespace {
             return;
 
         case k_EMsgClientStoreUserStats2: {         // 5466
-            AppId_t appId = Hooks_NetPacket_RichPresence::g_PlayingAppId;
+            AppId_t appId = Hooks_NetPacket_RichPresence::GetPlayingAppId();
             if (appId != 0)
                 CloudRedirectHost::NotifyStatsStored(appId);
             return;

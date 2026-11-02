@@ -98,6 +98,11 @@
 # PatternLoaderLogic.h (the required/optional "missing signature" policy
 # behind PatternLoader::FindPattern / FindPatternOptional) is header-only and
 # takes the lookup as a callable -- no TOML, module scan or popup involved.
+#
+# PatternRefreshLogic.h (when a cached pattern TOML may be revalidated and
+# whether a downloaded copy may replace it) and Tickets/ForgeBaseCache.h (the
+# account-keyed forge base slot + ticket-ownership predicate) are header-only
+# and dependency-free as well.
 # ---------------------------------------------------------------------------
 
 include(GTestDep)   # our recipe: GTest::gtest_main / GTest::gmock (/MT)
@@ -127,6 +132,9 @@ add_executable(AmethystToolTests
     remote_toml_logic_test.cpp
     pattern_loader_logic_test.cpp
     local_achievements_logic_test.cpp
+    remote_toml_load_source_test.cpp
+    forge_base_cache_test.cpp
+    pattern_refresh_logic_test.cpp
 
     # Units under test, compiled directly (no OSTPlatform lib link) — see header.
     "${_ostp}/Numbers.cpp"

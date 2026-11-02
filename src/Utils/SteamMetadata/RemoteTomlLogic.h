@@ -80,4 +80,31 @@ namespace RemoteTomlLogic {
         return transportOk && status == kHttpOk;
     }
 
+    // M-4 (v1.3.4 audit): the background revalidation may replace an already
+    // trusted cache, so it only talks to https:// mirrors. The scheme compare is
+    // ASCII case-insensitive (RFC 3986 3.1). Only that path applies this check;
+    // the cache-miss walk keeps accepting whatever [remote] url_template says.
+    [[nodiscard]] constexpr bool IsHttpsUrl(std::string_view url) noexcept
+    {
+        constexpr std::string_view kScheme = "https://";
+        if (url.size() < kScheme.size()) return false;
+        for (std::size_t i = 0; i < kScheme.size(); ++i) {
+            char c = url[i];
+            if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+            if (c != kScheme[i]) return false;
+        }
+        return true;
+    }
+
+    // Log label for where a fetched TOML came from (RemoteToml::Result flags):
+    //   !fromCache                     -> "remote"          (cache miss, network hit)
+    //   fromCache && !cacheFallback    -> "cache hit"       (normal cache-first path)
+    //   fromCache && cacheFallback     -> "cache fallback"  (network failed, cache as plan B)
+    // cacheFallback without fromCache is inconsistent input; it is still "remote".
+    [[nodiscard]] constexpr const char* DescribeLoadSource(bool fromCache, bool cacheFallback) noexcept
+    {
+        if (!fromCache) return "remote";
+        return cacheFallback ? "cache fallback" : "cache hit";
+    }
+
 } // namespace RemoteTomlLogic

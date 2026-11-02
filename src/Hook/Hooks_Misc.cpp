@@ -4,6 +4,9 @@
 #include "Utils/HookSupport/VehCommon.h"
 #include "dllmain.h"
 
+#include <mutex>
+#include <optional>
+
 namespace {
     // ── Resolve-only functions ─────────────────────────────────────
     RESOLVE_FUNC(CUtlBufferEnsureCapacity, void*, CUtlBuffer* pCUtlBuffer, uint32 newCapacity);
@@ -21,7 +24,11 @@ namespace {
     // Set by -realappid on the same command line. Suppresses the P2P appid flip
     // for this launch only — see ShouldReportOnlineFixAppId.
     bool      g_SuppressAppIdFlip;
+    // Read from the send hook (OnlineFix, RichPresence TrackSend) and the recv
+    // hook (RichPresence HandleRecv), so the map is guarded. The mutex is a leaf
+    // lock: it is never held across the call into Steam's AppInfo cache.
     std::unordered_map<AppId_t, std::string> g_GameNameCache;
+    std::mutex g_GameNameCacheMutex;
 
 
     // ── SpawnProcess interception ────────────────────────────────────────────
@@ -183,11 +190,21 @@ namespace Hooks_Misc {
     }
 
     // ── Game name ────────────────────────────────────────────────
+    std::optional<std::string> TryGetCachedGameName(AppId_t appId)
+    {
+        std::lock_guard<std::mutex> lock(g_GameNameCacheMutex);
+        auto it = g_GameNameCache.find(appId);
+        if (it == g_GameNameCache.end()) return std::nullopt;
+        return it->second;
+    }
+
     std::string GetGameNameByAppID(AppId_t appId)
     {
-        auto it = g_GameNameCache.find(appId);
-        if (it != g_GameNameCache.end()) return it->second;
+        if (auto cached = TryGetCachedGameName(appId)) return *cached;
 
+        // Steam's AppInfo lookup runs WITHOUT g_GameNameCacheMutex held. Two
+        // threads may both miss and both query; the second insert below simply
+        // keeps the first value, which is harmless.
         std::string name;
 
         if (CAPTURE_READY(GetAppDataFromAppInfo)) {
@@ -203,7 +220,10 @@ namespace Hooks_Misc {
         }
 
         LOG_MISC_DEBUG("GetGameNameByAppID({}): {}", appId, name);
-        g_GameNameCache[appId] = name;
+        {
+            std::lock_guard<std::mutex> lock(g_GameNameCacheMutex);
+            g_GameNameCache.try_emplace(appId, name);
+        }
         return name;
     }
 
