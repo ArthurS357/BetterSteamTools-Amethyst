@@ -1,8 +1,8 @@
 # Changelog
 
-## [v1.3.4] - 2026-11-01 (prep)
+## [v1.3.4] - 2026-11-02
 
-> **Prep:** nothing here has been built or run yet. Pending local `build.ps1` (Release + Debug) and `ctest`; expected 256 tests (213 + 43 new).
+> **Validated locally:** `build.ps1 -Clean` Release + Debug, 256/256 tests per configuration (213 + 43 new), warnings Release 9 / Debug 8 (baseline), `TokeerUri` @ ordinal 1, static `/MT` CRT.
 
 ### Added
 - **Self-healing pattern cache.** A cached pattern TOML was never re-downloaded, so a mirror fix for an already-cached Steam build (a missing function added, a signature corrected) never reached the user until they deleted `<Steam>\amethysttool\pattern` by hand. Now, when a *required* function from a cached file fails to resolve, `PatternLoader::StartCacheRevalidation` re-checks the mirror chain on a background thread (2 s resolve/connect/send, 3 s recv per mirror; at most once per 24 h per file via a `<sha256>.toml.checked` stamp). The cache is replaced atomically (temp + `MoveFileExW`) only by a TOML that parses, keeps every function key the old file had and resolves at least one missing function; the user is then asked to restart Steam. A healthy cache never triggers a request. Opt out with `[remote] revalidate = false`. Policy in `Utils/SteamMetadata/PatternRefreshLogic.h`.
@@ -56,5 +56,5 @@
   - The real hazard is unloading `AmethystTool.dll` mid-session (`FreeLibrary`, not a supported path) while the thread runs, which would crash.
   - `SteamDiagnostics` popups already use the same pattern.
 
-### Known / to run locally
-- clang-tidy could not run on Linux (Windows/Steam headers and generated `ost_log_macros.h` missing).
+### Static analysis
+- clang-tidy (Windows, `-misc-include-cleaner`) over the 12 changed `.cpp`: no new defects on v1.3.4 lines; remaining hits are the existing style categories (`misc-const-correctness`, magic numbers, internal linkage). `Hooks_NetPacket.cpp` is analysed only partially: protobuf headers don't parse under the clang frontend (pre-existing).
