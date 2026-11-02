@@ -130,6 +130,63 @@ TEST(PatternRefreshShouldReplaceCache, SameKeysWithFixedSignatureReplaces) {
     EXPECT_TRUE(ShouldReplaceCache(keys, keys, true, 1));
 }
 
+// ── H-1: working entries must stay identical ────────────────────
+
+namespace {
+    using PatternRefreshLogic::EntryMap;
+    using PatternRefreshLogic::PatternEntry;
+
+    constexpr uint32_t kWorking = 0x1111;   // resolves today
+    constexpr uint32_t kMissing = 0x2222;   // required, failed to resolve
+
+    // Cache as it is now: one working function, the missing one absent.
+    EntryMap CachedToday() {
+        return { { kWorking, PatternEntry{ "Working", 0x1000, "48 8B ??" } } };
+    }
+}
+
+TEST(PatternRefreshShouldReplaceCache, RejectReplacementWhenExistingEntryChanges) {
+    EntryMap candidate = CachedToday();
+    candidate[kWorking].rva = 0x6666;                                   // moves a working hook
+    candidate[kMissing] = PatternEntry{ "Missing", 0x2000, "" };
+    EXPECT_FALSE(PatternRefreshLogic::EntriesAreConsistent(CachedToday(), candidate, { kMissing }));
+    EXPECT_FALSE(ShouldReplaceCache(CachedToday(), candidate, { kMissing },
+                                    /*bodyDiffers=*/true, /*resolved=*/1, /*unresolvable=*/0));
+}
+
+TEST(PatternRefreshShouldReplaceCache, AcceptReplacementWhenOnlyMissingKeysAdded) {
+    EntryMap candidate = CachedToday();
+    candidate[kMissing] = PatternEntry{ "Missing", 0x2000, "" };       // only the fix
+    EXPECT_TRUE(PatternRefreshLogic::EntriesAreConsistent(CachedToday(), candidate, { kMissing }));
+    EXPECT_TRUE(ShouldReplaceCache(CachedToday(), candidate, { kMissing },
+                                   /*bodyDiffers=*/true, /*resolved=*/1, /*unresolvable=*/0));
+}
+
+TEST(PatternRefreshShouldReplaceCache, RejectReplacementWhenSignatureChanges) {
+    EntryMap candidate = CachedToday();
+    candidate[kWorking].sig = "E8 ?? ?? ?? ??";                         // rewrites a working sig
+    candidate[kMissing] = PatternEntry{ "Missing", 0x2000, "" };
+    EXPECT_FALSE(ShouldReplaceCache(CachedToday(), candidate, { kMissing },
+                                    /*bodyDiffers=*/true, /*resolved=*/1, /*unresolvable=*/0));
+}
+
+TEST(PatternRefreshShouldReplaceCache, RejectWhenACarriedMissingEntryIsUnresolvable) {
+    // Fixes one missing function but ships a bad entry for another: refused,
+    // because the next launch would hook the bad one (fail-closed).
+    EntryMap candidate = CachedToday();
+    candidate[kMissing] = PatternEntry{ "Missing", 0x2000, "" };
+    candidate[0x3333]   = PatternEntry{ "AlsoMissing", 0xFFFFFFFF, "" };
+    EXPECT_FALSE(ShouldReplaceCache(CachedToday(), candidate, { kMissing, 0x3333 },
+                                    /*bodyDiffers=*/true, /*resolved=*/1, /*unresolvable=*/1));
+}
+
+TEST(PatternRefreshRvaValidation, RvaMustLieInsideTheImage) {
+    static_assert(PatternRefreshLogic::IsRvaWithinImage(0x1000, 0x2000));
+    EXPECT_FALSE(PatternRefreshLogic::IsRvaWithinImage(0, 0x2000));        // "no rva"
+    EXPECT_FALSE(PatternRefreshLogic::IsRvaWithinImage(0x2000, 0x2000));   // one past the end
+    EXPECT_FALSE(PatternRefreshLogic::IsRvaWithinImage(0x1000, 0));        // image unknown
+}
+
 // ── StampFileName ───────────────────────────────────────────────
 
 TEST(PatternRefreshStampFileName, SitsBesideTheCachedToml) {

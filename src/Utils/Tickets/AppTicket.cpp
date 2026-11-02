@@ -196,7 +196,9 @@ namespace AppTicket {
             if (accountId == 0) {
                 LOG_DEBUG("PickForgeSourceTicket: no active user, skipping localconfig base");
             } else if (SourceTicket lc = ReadLocalConfigSourceTicket(accountId); lc.appId != 0) {
-                cached.Store(accountId, lc);
+                // Store only refuses accountId == 0, excluded by the branch above;
+                // a refusal would merely mean "re-read next call", so it is ignored.
+                (void)cached.Store(accountId, lc);
                 return lc;
             }
         }

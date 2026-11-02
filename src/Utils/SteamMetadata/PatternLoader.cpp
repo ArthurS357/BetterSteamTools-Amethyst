@@ -36,14 +36,12 @@ static_assert(Fnv1aHash("BuildDepotDependency") == 0xC37F2D8Eu,
 namespace {
 
 // ---- per-function pattern record ----
-struct PatternEntry {
-    std::string name;
-    uintptr_t   rva = 0;   // 0 = not present in file
-    std::string sig;        // empty = not present in file
-};
+// Shared with the pure replacement policy (PatternRefreshLogic.h), so the H-1
+// "working entries must stay identical" check runs on exactly this layout.
+using PatternEntry = PatternRefreshLogic::PatternEntry;
 
 // key = Fnv1aHash(funcName)
-using PatternMap = std::unordered_map<uint32_t, PatternEntry>;
+using PatternMap = PatternRefreshLogic::EntryMap;
 
 // module → its pattern map
 static std::unordered_map<OSTPlatform::DynamicLibrary::ModuleHandle, PatternMap> g_moduleMaps;
@@ -150,19 +148,16 @@ static PatternMap ParsePatternString(std::string_view body,
     }
 }
 
-static std::unordered_set<uint32_t> KeysOf(const PatternMap& map)
-{
-    std::unordered_set<uint32_t> keys;
-    keys.reserve(map.size());
-    for (const auto& [key, entry] : map) keys.insert(key);
-    return keys;
-}
-
 // Resolves funcName against an explicit pattern map: RVA first, then signature
 // scan. verbose=false is used when probing a candidate (not yet active) map
 // during cache revalidation, so a miss there doesn't read like a live failure.
+// requireRvaInImage=true (candidate probing only, H-1): an RVA counts as
+// resolved only if it lies inside the loaded module image; otherwise the entry
+// is unresolvable -- no fallback to its sig, because the live lookup on the next
+// launch would use that RVA. The live path keeps its pre-v1.3.4 behaviour.
 static void* LookupInMap(OSTPlatform::DynamicLibrary::ModuleHandle module,
-                         const PatternMap& map, const char* funcName, bool verbose)
+                         const PatternMap& map, const char* funcName, bool verbose,
+                         bool requireRvaInImage = false)
 {
     const uint32_t key = Fnv1aHash(funcName);
     auto entryIt = map.find(key);
@@ -175,6 +170,11 @@ static void* LookupInMap(OSTPlatform::DynamicLibrary::ModuleHandle module,
 
     // Priority 1: RVA direct offset
     if (entry.rva != 0) {
+        if (requireRvaInImage) {
+            const auto image = OSTPlatform::Memory::GetModuleImage(module);
+            if (!image || !PatternRefreshLogic::IsRvaWithinImage(entry.rva, image->size))
+                return nullptr;   // fail-closed: cannot validate -> unresolvable
+        }
         void* addr = reinterpret_cast<void*>(
             reinterpret_cast<uintptr_t>(module) + entry.rva);
         if (verbose) LOG_DEBUG("PatternLoader: {} resolved via RVA 0x{:X}", funcName, entry.rva);
@@ -271,7 +271,7 @@ struct RevalidationJob {
 // Returns false if the stamp could not be persisted with a fresh mtime -- the
 // caller then skips the network, because without a stamp the 24h throttle would
 // degrade to "every launch" (and an unwritable dir couldn't take the new TOML anyway).
-bool TouchStamp(const std::filesystem::path& stampPath)
+[[nodiscard]] bool TouchStamp(const std::filesystem::path& stampPath)
 {
     namespace fs = std::filesystem;
     std::error_code ec;
@@ -286,6 +286,22 @@ bool TouchStamp(const std::filesystem::path& stampPath)
     std::error_code timeEc;
     fs::last_write_time(stampPath, fs::file_time_type::clock::now(), timeEc);
     return !timeEc;
+}
+
+// Removes "<sha256>.toml.<tid>.tmp" leftovers (ReplaceCacheFile's temp naming)
+// from one component's cache directory. Best-effort, never throws.
+void RemoveOrphanTempFiles(const std::filesystem::path& dir)
+{
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    for (fs::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
+        const fs::path& p = it->path();
+        std::error_code fileEc;
+        if (p.extension() == L".tmp" &&
+            p.filename().wstring().find(L".toml.") != std::wstring::npos &&
+            it->is_regular_file(fileEc))
+            fs::remove(p, fileEc);
+    }
 }
 
 // Runs on a detached worker thread, never on Steam's loader path.
@@ -328,8 +344,11 @@ void Revalidate(const RevalidationJob& job, bool enabled)
     LOG_INFO("PatternLoader: {} cache has {} unresolved required function(s); "
              "checking mirrors for an updated TOML", job.info.component, job.missing.size());
 
+    // requireHttps (M-4): this path may replace a cache that is already trusted,
+    // so a cleartext mirror (custom http:// url_template) is never used here.
     const RemoteToml::RemoteBody remote = RemoteToml::FetchRemoteOnly(
-        request, job.info.sha256, kRevalidateTimeoutMs, kRevalidateRecvTimeoutMs);
+        request, job.info.sha256, kRevalidateTimeoutMs, kRevalidateRecvTimeoutMs,
+        /*requireHttps=*/true);
     if (!remote.ok) {
         LOG_INFO("PatternLoader: {} revalidation: no mirror answered; keeping cache", job.info.component);
         return;
@@ -337,16 +356,41 @@ void Revalidate(const RevalidationJob& job, bool enabled)
 
     std::string parseErr;
     const PatternMap remoteMap = ParsePatternString(remote.body, &parseErr);
+
+    // Probe each missing function against the candidate in the live module.
+    // RVAs must land inside the image (fail-closed, H-1). A NEW or CHANGED entry
+    // for a missing function that cannot be resolved makes the whole candidate
+    // unusable (the next launch would hook it). An entry identical to the cached
+    // one is today's state -- it already fails, installs no hook -- so it does not
+    // block a candidate that fixes another missing function.
+    std::unordered_set<uint32_t> missingKeys;
     size_t resolved = 0;
-    for (const std::string& name : job.missing)
-        if (LookupInMap(job.module, remoteMap, name.c_str(), /*verbose=*/false)) ++resolved;
+    size_t unresolvable = 0;
+    for (const std::string& name : job.missing) {
+        const uint32_t key = Fnv1aHash(name.c_str());
+        missingKeys.insert(key);
+        if (LookupInMap(job.module, remoteMap, name.c_str(), /*verbose=*/false,
+                        /*requireRvaInImage=*/true)) {
+            ++resolved;
+        } else if (const auto cand = remoteMap.find(key); cand != remoteMap.end()) {
+            const auto old = job.cachedMap.find(key);
+            if (old == job.cachedMap.end() || !SameEntry(old->second, cand->second))
+                ++unresolvable;
+        }
+    }
+
+    if (!EntriesAreConsistent(job.cachedMap, remoteMap, missingKeys)) {
+        LOG_WARN("PatternLoader: {} revalidation: mirror copy alters or drops entries that "
+                 "work today; refused (only missing functions may change)", job.info.component);
+        return;
+    }
 
     const bool differs = remote.body != job.info.cachedBody;
-    if (!ShouldReplaceCache(KeysOf(job.cachedMap), KeysOf(remoteMap), differs, resolved)) {
+    if (!ShouldReplaceCache(job.cachedMap, remoteMap, missingKeys, differs, resolved, unresolvable)) {
         LOG_INFO("PatternLoader: {} revalidation: mirror copy is not an improvement "
-                 "(differs={} entries={} resolves {}/{} missing{}{}); keeping cache",
+                 "(differs={} entries={} resolves {}/{} missing, {} unresolvable{}{}); keeping cache",
                  job.info.component, differs, remoteMap.size(), resolved, job.missing.size(),
-                 parseErr.empty() ? "" : ", parse error: ", parseErr);
+                 unresolvable, parseErr.empty() ? "" : ", parse error: ", parseErr);
         return;
     }
 
@@ -376,6 +420,11 @@ bool Load(OSTPlatform::DynamicLibrary::ModuleHandle module, const std::string& d
     const RemoteToml::Request request{ kPatternChannel, component, dllPath };
     RemoteToml::Result r = RemoteToml::Fetch(request);
 
+    // L-2: drop temp files a crash left between ReplaceCacheFile's write and its
+    // rename. Safe here: Load runs on the init thread before any revalidation
+    // worker exists, so no live temp file can be in this directory.
+    RemoveOrphanTempFiles(RemoteToml::CachePathFor(request, r.sha256).parent_path());
+
     if (r.ok) {
         std::string parseErr;
         PatternMap map = ParsePatternString(r.body, &parseErr);
@@ -389,7 +438,10 @@ bool Load(OSTPlatform::DynamicLibrary::ModuleHandle module, const std::string& d
         if (map.empty() && r.fromCache && !r.cacheFallback && Config::GetRemoteRevalidate()) {
             LOG_WARN("PatternLoader: cached TOML for {} is unusable ({}); re-downloading",
                      component, parseErr.empty() ? "no entries" : parseErr);
-            RemoteToml::RemoteBody fresh = RemoteToml::FetchRemoteOnly(request, r.sha256, 5000, 10000);
+            RemoteToml::RemoteBody fresh = RemoteToml::FetchRemoteOnly(
+                request, r.sha256,
+                PatternRefreshLogic::kCorruptCacheRefetchTimeoutMs,
+                PatternRefreshLogic::kCorruptCacheRefetchRecvTimeoutMs);
             if (fresh.ok) {
                 std::string freshErr;
                 PatternMap freshMap = ParsePatternString(fresh.body, &freshErr);
@@ -545,9 +597,21 @@ void StartCacheRevalidation()
     }
     if (jobs.empty()) return;
 
-    std::thread([jobs = std::move(jobs), enabled]() {
-        for (const RevalidationJob& job : jobs) Revalidate(job, enabled);
-    }).detach();
+    // M-1: an exception escaping a std::thread body calls std::terminate, which
+    // would take Steam down with it. Catch everything in the worker, and a
+    // failure to create the thread (std::system_error) on the init thread.
+    try {
+        std::thread([jobs = std::move(jobs), enabled]() {
+            try {
+                for (const RevalidationJob& job : jobs) Revalidate(job, enabled);
+            } catch (...) {
+                LOG_ERROR("PatternLoader: cache revalidation worker aborted by an exception; "
+                          "keeping the current cache");
+            }
+        }).detach();
+    } catch (...) {
+        LOG_ERROR("PatternLoader: could not start the cache revalidation worker; skipped");
+    }
 }
 
 } // namespace PatternLoader

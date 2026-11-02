@@ -6,6 +6,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <unordered_set>
 
 // Pure policy behind PatternLoader's self-healing cache refresh (v1.3.4),
@@ -37,6 +38,26 @@ namespace PatternRefreshLogic {
     // use kRevalidateTimeoutMs, recv uses kRevalidateRecvTimeoutMs.
     inline constexpr uint32_t kRevalidateTimeoutMs     = 2000;
     inline constexpr uint32_t kRevalidateRecvTimeoutMs = 3000;
+
+    // Timeouts for re-downloading a cached TOML that no longer parses. That path
+    // is a cache-miss equivalent on the init thread, so it uses the same values
+    // as RemoteToml::Fetch's cache-miss walk (OSTPlatform::Http defaults).
+    inline constexpr uint32_t kCorruptCacheRefetchTimeoutMs     = 5000;
+    inline constexpr uint32_t kCorruptCacheRefetchRecvTimeoutMs = 10000;
+
+    // One pattern-file entry, keyed in EntryMap by Fnv1aHash(function name) --
+    // the same layout PatternLoader parses the TOML into.
+    struct PatternEntry {
+        std::string    name;
+        std::uintptr_t rva = 0;   // 0 = not present in file
+        std::string    sig;       // empty = not present in file
+    };
+    using EntryMap = std::unordered_map<uint32_t, PatternEntry>;
+
+    [[nodiscard]] inline bool SameEntry(const PatternEntry& a, const PatternEntry& b) noexcept
+    {
+        return a.rva == b.rva && a.name == b.name && a.sig == b.sig;
+    }
 
     inline constexpr std::string_view kStampSuffix = ".checked";
 
@@ -97,17 +118,70 @@ namespace PatternRefreshLogic {
     //     reply is refused);
     //   * it resolves at least one function that is missing right now
     //     (measured against the live module by the caller).
-    [[nodiscard]] inline bool ShouldReplaceCache(const std::unordered_set<uint32_t>& cachedKeys,
-                                                 const std::unordered_set<uint32_t>& remoteKeys,
+    [[nodiscard]] inline bool ShouldReplaceCache(const std::unordered_set<uint32_t>& existingKeys,
+                                                 const std::unordered_set<uint32_t>& candidateKeys,
                                                  bool bodyDiffers,
-                                                 size_t missesResolvedByRemote)
+                                                 size_t missesResolvedByCandidate)
     {
-        if (!bodyDiffers || remoteKeys.empty() || missesResolvedByRemote == 0)
+        if (!bodyDiffers || candidateKeys.empty() || missesResolvedByCandidate == 0)
             return false;
-        for (uint32_t key : cachedKeys)
-            if (remoteKeys.count(key) == 0)
+        for (uint32_t key : existingKeys)
+            if (candidateKeys.count(key) == 0)
                 return false;
         return true;
+    }
+
+    // H-1 (v1.3.4 audit): a candidate TOML may only ADD or FIX the functions
+    // that are missing right now; every other entry the cache already had must
+    // be byte-identical (name + rva + sig) in the candidate. Otherwise a mirror
+    // could silently move hooks that work today. Fail-closed: an existing entry
+    // that is absent from the candidate is inconsistent too.
+    [[nodiscard]] inline bool EntriesAreConsistent(const EntryMap& existing,
+                                                   const EntryMap& candidate,
+                                                   const std::unordered_set<uint32_t>& missingKeys) noexcept
+    {
+        for (const auto& [key, entry] : existing) {
+            if (missingKeys.count(key) != 0) continue;   // missing: may be fixed
+            const auto it = candidate.find(key);
+            if (it == candidate.end() || !SameEntry(entry, it->second)) return false;
+        }
+        return true;
+    }
+
+    // A candidate RVA can only "resolve" a missing function if it points inside
+    // the loaded module image; anything else is treated as unresolvable
+    // (fail-closed) instead of being counted as a fix.
+    [[nodiscard]] constexpr bool IsRvaWithinImage(std::uintptr_t rva, std::size_t imageSize) noexcept
+    {
+        return rva != 0 && rva < imageSize;
+    }
+
+    // Full replacement decision used by PatternLoader. On top of the key-set
+    // rules above:
+    //   * EntriesAreConsistent (working entries untouched -- H-1);
+    //   * no NEW or CHANGED entry for a missing function may be unresolvable
+    //     (missesUnresolvableInCandidate == 0, counted by the caller): a
+    //     candidate that ships a bad entry for one missing function is refused
+    //     even if it fixes another, because the next launch would hook that bad
+    //     entry. An entry identical to the cached one is not counted -- it is
+    //     today's state and already installs no hook.
+    [[nodiscard]] inline bool ShouldReplaceCache(const EntryMap& existing,
+                                                 const EntryMap& candidate,
+                                                 const std::unordered_set<uint32_t>& missingKeys,
+                                                 bool bodyDiffers,
+                                                 size_t missesResolvedByCandidate,
+                                                 size_t missesUnresolvableInCandidate)
+    {
+        if (missesUnresolvableInCandidate != 0) return false;
+        if (!EntriesAreConsistent(existing, candidate, missingKeys)) return false;
+
+        std::unordered_set<uint32_t> existingKeys;
+        std::unordered_set<uint32_t> candidateKeys;
+        existingKeys.reserve(existing.size());
+        candidateKeys.reserve(candidate.size());
+        for (const auto& kv : existing)  existingKeys.insert(kv.first);
+        for (const auto& kv : candidate) candidateKeys.insert(kv.first);
+        return ShouldReplaceCache(existingKeys, candidateKeys, bodyDiffers, missesResolvedByCandidate);
     }
 
     // Sidecar stamp next to "<sha256>.toml": "<sha256>.toml.checked".

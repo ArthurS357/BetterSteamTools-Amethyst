@@ -27,7 +27,7 @@ namespace {
         if (c.Lookup(active, out)) return out;
         if (active == 0) return {};
         ++resolves;
-        c.Store(active, resolved);
+        (void)c.Store(active, resolved);   // active != 0 here, so Store always accepts
         return resolved;
     }
 }
@@ -49,7 +49,7 @@ TEST(ForgeBaseCache, HitsForTheSameAccount) {
 
 TEST(ForgeBaseCache, MissesForADifferentAccountWithoutExplicitInvalidate) {
     Cache c;
-    c.Store(kAcctA, kTicketA);
+    ASSERT_TRUE(c.Store(kAcctA, kTicketA));
     std::vector<uint8_t> out;
     EXPECT_FALSE(c.Lookup(kAcctB, out));
 }
@@ -58,14 +58,14 @@ TEST(ForgeBaseCache, ZeroAccountNeverStoresOrHits) {
     Cache c;
     EXPECT_FALSE(c.Store(0, kTicketA));
     EXPECT_FALSE(c.HasValue());
-    c.Store(kAcctA, kTicketA);
+    ASSERT_TRUE(c.Store(kAcctA, kTicketA));
     std::vector<uint8_t> out;
     EXPECT_FALSE(c.Lookup(0, out));
 }
 
 TEST(ForgeBaseCache, InvalidateIfAccountChangedDropsOnlyOnChange) {
     Cache c;
-    c.Store(kAcctA, kTicketA);
+    ASSERT_TRUE(c.Store(kAcctA, kTicketA));
     EXPECT_FALSE(c.InvalidateIfAccountChanged(kAcctA));
     EXPECT_TRUE(c.HasValue());
     EXPECT_TRUE(c.InvalidateIfAccountChanged(kAcctB));
@@ -75,7 +75,7 @@ TEST(ForgeBaseCache, InvalidateIfAccountChangedDropsOnlyOnChange) {
 
 TEST(ForgeBaseCache, LoggingOutInvalidates) {
     Cache c;
-    c.Store(kAcctA, kTicketA);
+    ASSERT_TRUE(c.Store(kAcctA, kTicketA));
     EXPECT_TRUE(c.InvalidateIfAccountChanged(0));
     EXPECT_FALSE(c.HasValue());
 }
@@ -88,8 +88,8 @@ TEST(ForgeBaseCache, InvalidateOnEmptyReportsNothingDropped) {
 
 TEST(ForgeBaseCache, StoreReplacesOtherAccountsEntry) {
     Cache c;
-    c.Store(kAcctA, kTicketA);
-    c.Store(kAcctB, kTicketB);
+    ASSERT_TRUE(c.Store(kAcctA, kTicketA));
+    ASSERT_TRUE(c.Store(kAcctB, kTicketB));
     std::vector<uint8_t> out;
     EXPECT_FALSE(c.Lookup(kAcctA, out));
     ASSERT_TRUE(c.Lookup(kAcctB, out));

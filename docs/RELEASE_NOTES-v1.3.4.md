@@ -10,7 +10,14 @@ Base: v1.3.3 (`e20ad7a`).
 - **Fix: data races in `Hooks_NetPacket`.** RichPresence state shared between the send and recv hooks is now mutex-protected, the achievements state got the same hardening, the game-name cache is locked, and Steam's AppInfo lookup no longer runs while our lock is held (lock-order risk).
 - **Fix: forge fallback tickets from another account.** The appid 7 / 228980 / seen-ticket fallbacks now also reject tickets issued to a different account (another error-54 path).
 - **Polish:** accurate `cache hit` / `cache fallback` log labels, corrected comment in `RemoteToml.h`, and the IPC-spec-missing popup now points to the maintained `madoiscool/steam-monitor` mirror.
-- **Tests:** 37 new unit tests (expected total 250).
+- **Tests:** 43 new unit tests (expected total 256).
+
+## Security hardening
+
+- **Working patterns are never modified by a refresh (H-1).** A downloaded signature file may only add or fix the functions that are missing right now. Every entry that already works must be byte-identical in the download, or the download is refused. A fix only counts if its RVA lies inside the loaded Steam module. A download that carries a new or changed bad entry for any missing function is refused as a whole (fail-closed).
+- **https-only refresh (M-4).** The background refresh never uses a plain `http://` mirror, even if one is configured in `[remote] url_template`. Cache-miss downloads are unchanged.
+- **The refresh worker can't crash Steam (M-1).** Every exception inside the background worker, or while starting it, is caught; the current cache stays in use.
+- Cache file replacement is flushed to disk (`MOVEFILE_WRITE_THROUGH`), and orphaned temp files from an interrupted write are cleaned up on the next start.
 
 ## Compatibility notes
 
@@ -29,6 +36,6 @@ Not yet built or tested by CI. Validate locally:
 .\build.ps1          # builds and tests Release + Debug
 ```
 
-Expected: 250/250 tests per configuration. Then tag `v1.3.4`, and `release.ps1` generates the packaged artifacts (its auto-generated notes go to the git-ignored `release/` folder).
+Expected: 256/256 tests per configuration. Then tag `v1.3.4`, and `release.ps1` generates the packaged artifacts (its auto-generated notes go to the git-ignored `release/` folder).
 
 See `CHANGELOG.md` for the full list.

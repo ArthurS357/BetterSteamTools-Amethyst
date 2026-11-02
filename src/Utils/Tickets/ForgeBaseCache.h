@@ -12,6 +12,7 @@
 // synchronized: AppTicket.cpp guards it with its own mutex.
 
 #include <cstdint>
+#include <type_traits>
 #include <utility>
 
 namespace ForgeBaseCache {
@@ -31,6 +32,13 @@ namespace ForgeBaseCache {
 
     template <typename T>
     class AccountKeyedCache {
+        // L-5: requirements the members below actually use. Copy-assignable is
+        // needed by Lookup (copies the value out), move-assignable by Store and
+        // Invalidate. T need NOT be trivially copyable (SourceTicket holds a vector).
+        static_assert(std::is_default_constructible_v<T>, "AccountKeyedCache<T>: T must be default-constructible");
+        static_assert(std::is_copy_assignable_v<T>,       "AccountKeyedCache<T>: Lookup copies T out");
+        static_assert(std::is_move_assignable_v<T>,       "AccountKeyedCache<T>: Store/Invalidate move-assign T");
+
     public:
         // True and *out filled only when a value is stored for exactly accountId.
         // accountId == 0 (no active user) never hits.
@@ -42,7 +50,7 @@ namespace ForgeBaseCache {
 
         // Store a freshly resolved value for accountId (replaces any other
         // account's entry). accountId == 0 is refused.
-        bool Store(uint32_t accountId, T value) {
+        [[nodiscard]] bool Store(uint32_t accountId, T value) {
             if (accountId == 0) return false;
             m_accountId = accountId;
             m_value = std::move(value);
@@ -66,8 +74,8 @@ namespace ForgeBaseCache {
             return false;
         }
 
-        bool     HasValue() const  { return m_valid; }
-        uint32_t AccountId() const { return m_accountId; }
+        [[nodiscard]] bool     HasValue() const noexcept  { return m_valid; }
+        [[nodiscard]] uint32_t AccountId() const noexcept { return m_accountId; }
 
     private:
         bool     m_valid = false;

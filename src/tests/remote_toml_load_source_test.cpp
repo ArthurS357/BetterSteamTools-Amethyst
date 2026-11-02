@@ -32,3 +32,16 @@ TEST(DescribeLoadSource, IsUsableInConstantExpressions) {
     constexpr const char* s = DescribeLoadSource(true, false);
     EXPECT_EQ(std::string(s), "cache hit");
 }
+
+// ── IsHttpsUrl (M-4: background revalidation is https-only) ──────
+
+TEST(RemoteTomlIsHttpsUrl, AcceptsHttpsCaseInsensitiveRejectsEverythingElse) {
+    using RemoteTomlLogic::IsHttpsUrl;
+    static_assert(IsHttpsUrl("https://raw.githubusercontent.com/x"));
+    EXPECT_TRUE(IsHttpsUrl("HTTPS://cdn.jsdelivr.net/gh/x"));
+    EXPECT_FALSE(IsHttpsUrl("http://intranet.local/pattern/steamclient/abc.toml"));
+    EXPECT_FALSE(IsHttpsUrl("https:/missing-slash"));
+    EXPECT_FALSE(IsHttpsUrl("ftp://x"));
+    EXPECT_FALSE(IsHttpsUrl(""));
+    EXPECT_FALSE(IsHttpsUrl(" https://leading-space"));
+}

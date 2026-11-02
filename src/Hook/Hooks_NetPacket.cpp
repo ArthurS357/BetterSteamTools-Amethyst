@@ -1355,6 +1355,19 @@ namespace Hooks_NetPacket_RichPresence {
     // inject packet and the per-app RP KVs), so g_RPMutex guards ALL of it.
     // ApplyGameFields / BuildInject expect the caller to hold it. It is never held
     // across CloudRedirectHost calls or oRecvPkt (invokeOriginal).
+    //
+    // LOCK HIERARCHY (v1.3.4) -- the single place this is written down:
+    //   g_RPMutex  ->  Hooks_Misc g_GameNameCacheMutex   (the ONLY nesting)
+    //     ApplyGameFields calls Hooks_Misc::TryGetCachedGameName under g_RPMutex;
+    //     g_GameNameCacheMutex is a leaf and never takes another lock nor calls
+    //     into Steam while held.
+    //   Independent leaves, never held together with any other of our locks:
+    //     Hooks_NetPacket_UserStats::g_JobMutex, Hooks_NetPacket_UserStats::g_AchMutex
+    //     (job lookups finish before g_AchMutex is taken), and AppTicket.cpp's
+    //     PickForgeSourceTicket cacheMutex (GetActiveUser runs before it, the
+    //     Hooks_Decryption fallback probes after it).
+    //   None of them is held across invokeOriginal, CloudRedirectHost::* or a
+    //   Steam AppInfo lookup. Adding a new nesting means updating this comment.
     std::mutex g_RPMutex;
 
     AppId_t g_PlayingAppId = 0;

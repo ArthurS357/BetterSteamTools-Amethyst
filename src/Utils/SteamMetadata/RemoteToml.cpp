@@ -1,3 +1,12 @@
+// L-3: trim <windows.h> and keep its min/max macros out of this TU. Defined
+// before ANY include so they also apply if a header pulls windows.h in first.
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+
 #include "RemoteToml.h"
 #include "OSTPlatform/include/Encoding.h"
 #include "OSTPlatform/include/Http.h"
@@ -195,7 +204,7 @@ std::filesystem::path CachePathFor(const Request& request, const std::string& sh
 }
 
 RemoteBody FetchRemoteOnly(const Request& request, const std::string& sha256,
-                           uint32_t timeoutMs, uint32_t recvTimeoutMs)
+                           uint32_t timeoutMs, uint32_t recvTimeoutMs, bool requireHttps)
 {
     RemoteBody out;
     if (sha256.empty()) return out;
@@ -204,6 +213,11 @@ RemoteBody FetchRemoteOnly(const Request& request, const std::string& sha256,
         BuildUrlTemplates(), request.channel, request.component, sha256);
 
     for (const std::string& url : urls) {
+        if (requireHttps && !RemoteTomlLogic::IsHttpsUrl(url)) {
+            LOG_WARN("RemoteToml({}/{}): revalidation skips non-https mirror {}",
+                     request.channel, request.component, url);
+            continue;
+        }
         out.url = url;
         OSTPlatform::Http::Result http = OSTPlatform::Http::Execute(
             L"GET", url.c_str(), nullptr, 0, nullptr,
@@ -240,7 +254,10 @@ bool ReplaceCacheFile(const std::filesystem::path& cachePath, const std::string&
             return false;
         }
     }
-    if (!::MoveFileExW(tmp.c_str(), cachePath.c_str(), MOVEFILE_REPLACE_EXISTING)) {
+    // WRITE_THROUGH (L-2): the call returns only after the rename is flushed to
+    // disk, so a power loss can't leave the directory entry pointing nowhere.
+    if (!::MoveFileExW(tmp.c_str(), cachePath.c_str(),
+                       MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
         fs::remove(tmp, ec);
         return false;
     }
