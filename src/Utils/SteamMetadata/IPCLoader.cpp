@@ -148,7 +148,7 @@ namespace {
             "  2. Drop a matching TOML at:\n"
             "       <Steam>\\amethysttool\\ipc\\steamclient\\" + sha256 + ".toml\n"
             "  3. Check upstream:\n"
-            "       https://github.com/OpenSteam001/steam-monitor/tree/ipc/steamclient");
+            "       https://github.com/madoiscool/steam-monitor/tree/ipc/steamclient");
     }
 
 } // namespace
@@ -189,7 +189,7 @@ bool Load(const std::string& steamclientPath)
 
     LOG_INFO("IPCLoader: loaded {} methods across {} interfaces ({})",
              MethodCount(), InterfaceCount(),
-             r.fromCache ? "cache fallback" : "remote");
+             r.fromCache ? (r.cacheFallback ? "cache fallback" : "cache hit") : "remote");
     return true;
 }
 

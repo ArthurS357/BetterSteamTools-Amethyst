@@ -228,6 +228,10 @@ AmethystTool 不再在 DLL 中内置字节模式签名。相反，每次启动�
 
    在 `raw.githubusercontent.com` 被封锁的地区（如中国大陆），jsDelivr 很有用。成功获取的内容会写入缓存
 
+IPC 规格弹窗（`ipc` 通道）指向仍在积极维护的镜像：<https://github.com/madoiscool/steam-monitor/tree/ipc/steamclient>。
+
+> **`amethysttool://` URI 方案 — 默认休眠。** `amethysttool://redeem` 与 `amethysttool://refreshachievements[/<appid|all>]` 处理程序已实现，但仅当构建时设置 `-DOST_TOKEER_URL=...` 才会在 Windows 注册表中注册该方案。默认构建不注册，因为已注册的协议处理程序会让任意网页通过 `rundll32` 启动该 DLL。
+
 各镜像是覆盖范围不同的独立仓库，因此某个镜像返回 **404** 不会终止循环——会继续尝试下一个镜像。如果所有镜像都失败，出现一次性弹窗，显示不匹配的 DLL 名称、其 SHA-256、预期缓存路径和上游 URL。仅禁用与该 DLL 相关的钩子——AmethystTool 的其余部分继续工作
 
 如果你知道给定版本的布局，也可以手动将模式 TOML 放入缓存目录；文件名必须为 `<sha256>.toml`。下次启动时会在访问任何镜像之前使用它

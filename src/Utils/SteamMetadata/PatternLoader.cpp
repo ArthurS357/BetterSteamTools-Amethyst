@@ -188,7 +188,8 @@ bool Load(OSTPlatform::DynamicLibrary::ModuleHandle module, const std::string& d
         PatternMap map = ParsePatternString(r.body, &parseErr);
         if (!map.empty()) {
             LOG_INFO("PatternLoader: loaded {} patterns for {} ({})",
-                     map.size(), component, r.fromCache ? "cache fallback" : "remote");
+                     map.size(), component,
+                     r.fromCache ? (r.cacheFallback ? "cache fallback" : "cache hit") : "remote");
             g_moduleMaps[module] = std::move(map);
             return true;
         }

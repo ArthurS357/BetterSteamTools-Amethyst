@@ -166,6 +166,7 @@ Result Fetch(const Request& request)
                 out.body = std::move(buf);
                 out.ok = true;
                 out.fromCache = true;
+                out.cacheFallback = true;
                 return out;
             }
             LOG_WARN("RemoteToml({}/{}): cache file empty: {}",

@@ -12,11 +12,12 @@ namespace RemoteToml {
     struct Result {
         bool        ok        = false;
         bool        fromCache = false;
+        bool        cacheFallback = false; // true only when the network failed and the cache was the plan B
         std::string body;
         std::string sha256;
     };
 
-    // Fetch remote TOML first, then fall back to the exact local cache entry.
+    // Read from local cache first; fetch remote only if missing.
     Result Fetch(const Request& request);
 
 } // namespace RemoteToml

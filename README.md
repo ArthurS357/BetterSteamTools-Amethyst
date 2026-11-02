@@ -307,6 +307,10 @@ Lookup order:
 
 Mirrors are independent repos with different coverage, so a **404** on one does not stop the loop — the next mirror is tried. If every mirror fails, a one-shot popup appears with the unmatched DLL name, its SHA-256, the expected cache path, and the upstream URL. Only the hooks tied to that DLL are disabled — the rest of AmethystTool keeps working.
 
+The IPC spec popup (`ipc` channel) points to the actively maintained mirror: <https://github.com/madoiscool/steam-monitor/tree/ipc/steamclient>.
+
+> **`amethysttool://` URI scheme — dormant by default.** The `amethysttool://redeem` and `amethysttool://refreshachievements[/<appid|all>]` handlers are implemented, but the scheme is only registered in the Windows registry when the build sets `-DOST_TOKEER_URL=...`. The default build does not register it, because a registered protocol handler lets any web page launch the DLL via `rundll32`. If you enable it, `refreshachievements` only accepts a `uint32` appid or `all` and deletes the cached achievement schema files for it.
+
 You can also drop a pattern TOML into the cache directory manually if you know the layout for a given build; the file name must be `<sha256>.toml`. It is used on the next launch, before any mirror is contacted.
 
 > A short outbound HTTPS request is performed only on a cache miss (one per DLL: `steamclient64.dll`, `steamui.dll`). The downloaded bodies are tiny (~10 KB each) and the work runs on a worker thread, so it never blocks Steam's loader.

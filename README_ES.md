@@ -221,6 +221,10 @@ Orden de búsqueda:
 
    jsDelivr ayuda en regiones donde `raw.githubusercontent.com` está bloqueado (por ejemplo, China continental). El cuerpo obtenido se guarda en la caché.
 
+El popup de especificación IPC (canal `ipc`) apunta al espejo mantenido activamente: <https://github.com/madoiscool/steam-monitor/tree/ipc/steamclient>.
+
+> **Esquema URI `amethysttool://` — inactivo por defecto.** Los manejadores `amethysttool://redeem` y `amethysttool://refreshachievements[/<appid|all>]` están implementados, pero el esquema solo se registra en el registro de Windows si la compilación define `-DOST_TOKEER_URL=...`. La compilación por defecto no lo registra, porque un manejador de protocolo registrado permite que cualquier página web lance la DLL mediante `rundll32`.
+
 Los espejos son repositorios independientes con cobertura distinta, así que un **404** en uno no detiene el bucle: se prueba el siguiente espejo. Si todos fallan, aparecerá una ventana emergente por única vez mostrando el nombre de la DLL no emparejada, su SHA-256, la ruta de caché esperada y la URL de origen. Solo se desactivarán los ganchos (hooks) vinculados a esa DLL; el resto de AmethystTool seguirá funcionando.
 
 También puedes colocar manualmente un archivo TOML de patrones en el directorio de la caché si conoces la estructura para una compilación determinada; el nombre del archivo debe ser `<sha256>.toml`. Se usará en el siguiente inicio, antes de contactar cualquier espejo.
