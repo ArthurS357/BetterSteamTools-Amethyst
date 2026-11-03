@@ -68,8 +68,14 @@ static void ApplyCompatibilityAliases()
         return;
     try {
         using CompatAliasLogic::DescribeDecision;
+        // The PID keeps this process's temp files apart from those of another
+        // steam.exe doing the same thing at the same moment (see CompatAliasLogic.h).
         const auto r = CompatAliasLogic::Apply(
-            true, OSTPlatform::Encoding::Utf8ToPath(SteamInstallPath));
+            true, OSTPlatform::Encoding::Utf8ToPath(SteamInstallPath),
+            std::to_string(GetCurrentProcessId()));
+        if (r.staleTempsRemoved != 0)
+            LOG_DEBUG("[compatibility] removed {} stale alias temp file(s) from an interrupted run",
+                      r.staleTempsRemoved);
 
         const auto report = []([[maybe_unused]] const char* name,
                                const CompatAliasLogic::FileOutcome& f) {

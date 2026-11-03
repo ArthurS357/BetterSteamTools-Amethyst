@@ -1,5 +1,7 @@
 #pragma once
 
+#include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <string>
@@ -25,6 +27,15 @@
 //   - Never fatal: every filesystem error is reported via std::error_code.
 //   - Writes go to a temp file first and are renamed into place, so a full
 //     disk or a crash never leaves a truncated alias behind.
+//   - Every call writes its OWN temp file ("<alias>.<tag>.amethyst-tmp", tag =
+//     caller's process tag + a process-wide counter + a clock tick). Two writers
+//     -- two steam.exe processes started close together (the main one and a
+//     short-lived `steam://` forwarder), or two threads -- therefore never share
+//     a temp file. With one shared name a writer could rename another writer's
+//     temp into place while it was still being written (a reader then sees a
+//     partial alias) or find its own temp already gone. Orphans left by a process
+//     killed mid-write (a worker thread dies with its process) are swept by
+//     RemoveStaleTemps once they are old enough that no live writer can own them.
 //
 // Pure (std::filesystem + <fstream> only): compiled straight into the unit
 // test binary like ConfigMigration.cpp, without Lua, WinHTTP or spdlog.
@@ -47,6 +58,13 @@ namespace CompatAliasLogic {
         "# AmethystTool compatibility alias -- generated from amethysttool.toml.\n"
         "# Only read by external tools (e.g. LuaTools Validator); AmethystTool\n"
         "# itself always reads amethysttool.toml. Safe to delete.\n";
+
+    // Every temp file ends with this; see the header comment for the full name.
+    inline constexpr std::string_view kTempSuffix = ".amethyst-tmp";
+
+    // A temp file older than this cannot belong to a live writer (a write takes
+    // milliseconds) and is removed by RemoveStaleTemps.
+    inline constexpr std::chrono::minutes kStaleTempAge{ 10 };
 
     // Files above this size are never read into memory; they are treated as
     // not-ours (left untouched). The real DLL is a few MB.
@@ -101,10 +119,40 @@ namespace CompatAliasLogic {
     struct ApplyResult {
         FileOutcome dll;
         FileOutcome toml;
+        std::size_t staleTempsRemoved = 0;   // orphaned temp files swept before writing
     };
+
+    // Removes orphaned "<alias>.*.amethyst-tmp" files (both aliases) directly
+    // inside steamDir that are at least `minAge` old. Only regular files that
+    // match the temp naming exactly are touched -- never a symlink, directory or
+    // any other file -- and a temp newer than `minAge` is left alone because it
+    // may belong to a writer that is running right now. Best effort: returns how
+    // many were removed, never throws.
+    std::size_t RemoveStaleTemps(const std::filesystem::path& steamDir,
+                                 std::chrono::seconds minAge = kStaleTempAge);
 
     // Decide + write both aliases inside steamDir. Never throws on filesystem
     // errors; with enabled = false it performs no I/O at all.
-    [[nodiscard]] ApplyResult Apply(bool enabled, const std::filesystem::path& steamDir);
+    //
+    // processTag distinguishes this process's temp files from other processes'
+    // (pass the PID); it is sanitised to [A-Za-z0-9_-] and may be empty, since a
+    // counter and a clock tick already separate threads of one process.
+    [[nodiscard]] ApplyResult Apply(bool enabled, const std::filesystem::path& steamDir,
+                                    std::string_view processTag = {});
+
+    // Building blocks of Apply, exposed for the unit tests (deterministic failure
+    // injection). Not part of the feature's API.
+    namespace detail {
+        // "<processTag>-<counter>-<tick>" with processTag sanitised; never empty.
+        [[nodiscard]] std::string MakeTempTag(std::string_view processTag);
+        // "<alias>.<tag>.amethyst-tmp", next to the alias.
+        [[nodiscard]] std::filesystem::path TempPathFor(const std::filesystem::path& alias,
+                                                        std::string_view tag);
+        // Writes `bytes` to this call's own temp file, then renames it over
+        // `alias`. On any failure the temp is removed and `alias` is untouched.
+        [[nodiscard]] std::error_code WriteBytesViaTemp(const std::string& bytes,
+                                                        const std::filesystem::path& alias,
+                                                        std::string_view tag);
+    }
 
 } // namespace CompatAliasLogic

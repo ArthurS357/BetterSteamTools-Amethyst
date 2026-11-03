@@ -18,10 +18,15 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <thread>
+#include <vector>
 
 namespace fs = std::filesystem;
 using CompatAliasLogic::Decision;
@@ -138,6 +143,19 @@ namespace {
                                std::istreambuf_iterator<char>());
         }
 
+        // Every "*.amethyst-tmp" currently in the Steam dir (any alias, any tag).
+        std::vector<fs::path> TempFiles() const {
+            std::vector<fs::path> out;
+            for (const auto& e : fs::directory_iterator(dir_))
+                if (e.path().extension() == ".amethyst-tmp") out.push_back(e.path());
+            return out;
+        }
+
+        // Backdates a file's mtime (a temp left by a process that died `age` ago).
+        static void Age(const fs::path& p, std::chrono::hours age) {
+            fs::last_write_time(p, fs::file_time_type::clock::now() - age);
+        }
+
         fs::path SourceDll() const  { return dir_ / "AmethystTool.dll"; }
         fs::path AliasDll() const   { return dir_ / "OpenSteamTool.dll"; }
         fs::path SourceToml() const { return dir_ / "amethysttool.toml"; }
@@ -176,8 +194,7 @@ namespace {
         // Sources untouched, no temp files left behind.
         EXPECT_EQ(Read(SourceDll()), kOurDll);
         EXPECT_EQ(Read(SourceToml()), kToml);
-        EXPECT_FALSE(fs::exists(dir_ / "OpenSteamTool.dll.amethyst-tmp"));
-        EXPECT_FALSE(fs::exists(dir_ / "opensteamtool.toml.amethyst-tmp"));
+        EXPECT_TRUE(TempFiles().empty());
     }
 
     TEST_F(CompatAliasFileTest, SecondRunIsUpToDateAndWritesNothing) {
@@ -247,18 +264,211 @@ namespace {
     // Fail-safe: the write itself fails (a directory squats on our temp name).
     // Must not throw, must report the error, must leave no alias behind -- and
     // the TOML alias is still written independently.
-    TEST_F(CompatAliasFileTest, WriteFailureIsReportedNotThrown) {
+    // ── Write failures (deterministic, via the exposed building blocks) ──────
+    //
+    // Apply() itself can no longer be steered into a write failure: each call's
+    // temp name is unique, so there is nothing fixed to block. The two failure
+    // points are the temp write and the final rename; both are driven directly.
+
+    TEST_F(CompatAliasFileTest, TempWriteFailureIsReportedAndLeavesNothing) {
+        // The directory that should hold the temp does not exist.
+        const fs::path alias = dir_ / "missing-subdir" / "OpenSteamTool.dll";
+        std::error_code ec;
+        EXPECT_NO_THROW(ec = CompatAliasLogic::detail::WriteBytesViaTemp(kOurDll, alias, "t1"));
+        EXPECT_TRUE(static_cast<bool>(ec));
+        EXPECT_FALSE(fs::exists(alias));
+        EXPECT_FALSE(fs::exists(dir_ / "missing-subdir"));
+    }
+
+    TEST_F(CompatAliasFileTest, RenameFailureIsReportedRemovesTheTempAndKeepsTheAlias) {
+        // A directory squatting on the alias name makes the final rename fail
+        // (Apply never gets this far -- Decide calls it Foreign -- but a directory
+        // can appear between Decide and the rename).
+        fs::create_directories(AliasDll());
+        Write(AliasDll() / "keep.txt", "untouched");
+
+        std::error_code ec;
+        EXPECT_NO_THROW(ec = CompatAliasLogic::detail::WriteBytesViaTemp(kOurDll, AliasDll(), "t2"));
+        EXPECT_TRUE(static_cast<bool>(ec));
+        EXPECT_TRUE(TempFiles().empty());                       // the written temp was cleaned up
+        EXPECT_TRUE(fs::is_directory(AliasDll()));
+        EXPECT_EQ(Read(AliasDll() / "keep.txt"), "untouched");
+    }
+
+    TEST_F(CompatAliasFileTest, SuccessfulWriteReplacesAnExistingOwnAliasAtomically) {
+        Write(AliasDll(), kOurOlderDll);
+        const auto ec = CompatAliasLogic::detail::WriteBytesViaTemp(kOurDll, AliasDll(), "t3");
+        EXPECT_FALSE(static_cast<bool>(ec));
+        EXPECT_EQ(Read(AliasDll()), kOurDll);
+        EXPECT_TRUE(TempFiles().empty());
+    }
+
+    TEST_F(CompatAliasFileTest, EmptyPayloadIsWrittenAsAnEmptyFile) {
+        const auto ec = CompatAliasLogic::detail::WriteBytesViaTemp("", AliasToml(), "t4");
+        EXPECT_FALSE(static_cast<bool>(ec));
+        ASSERT_TRUE(fs::exists(AliasToml()));
+        EXPECT_EQ(fs::file_size(AliasToml()), 0u);
+    }
+
+    // ── Temp names ───────────────────────────────────────────────────────────
+
+    TEST(CompatAliasTempNames, TagsAreUniqueAcrossCallsEvenWithTheSameProcessTag) {
+        std::vector<std::string> seen;
+        for (int i = 0; i < 1000; ++i) seen.push_back(CompatAliasLogic::detail::MakeTempTag("4242"));
+        std::sort(seen.begin(), seen.end());
+        EXPECT_EQ(std::adjacent_find(seen.begin(), seen.end()), seen.end());
+    }
+
+    TEST(CompatAliasTempNames, ProcessTagIsSanitisedAndBoundedSoItCannotEscapeTheDirectory) {
+        const std::string hostile = CompatAliasLogic::detail::MakeTempTag("../../evil\\name:with*bad?chars");
+        EXPECT_EQ(hostile.find_first_of("/\\:*?\"<>|"), std::string::npos);
+        EXPECT_EQ(hostile.find(".."), std::string::npos);
+        const std::string longTag = CompatAliasLogic::detail::MakeTempTag(std::string(500, 'a'));
+        EXPECT_LT(longTag.size(), 100u);
+
+        const fs::path tmp = CompatAliasLogic::detail::TempPathFor(fs::path("steam") / "OpenSteamTool.dll", hostile);
+        EXPECT_EQ(tmp.parent_path(), fs::path("steam"));          // still a sibling of the alias
+        EXPECT_EQ(tmp.extension(), ".amethyst-tmp");
+    }
+
+    TEST(CompatAliasTempNames, EmptyProcessTagStillProducesAUsableTag) {
+        const std::string tag = CompatAliasLogic::detail::MakeTempTag("");
+        EXPECT_FALSE(tag.empty());
+        EXPECT_NE(tag.front(), '-');
+    }
+
+    // ── Concurrent writers (two steam.exe, or two threads) ──────────────────
+    //
+    // Regression for the shared-temp-name design: with one fixed temp name per
+    // alias, concurrent Apply() calls renamed each other's half-written temp into
+    // place (an observer saw a partial alias) and failed when their own temp had
+    // already been moved. Each call now owns its temp, so the alias is only ever
+    // absent or complete.
+    //
+    // The observer only stat()s the alias -- it never keeps a handle open, because
+    // on Windows an open handle (std::ifstream has no FILE_SHARE_DELETE) would make
+    // the writers' rename fail for a reason that has nothing to do with the code
+    // under test. For the same reason "every call succeeds" is asserted on POSIX
+    // only, where rename-over is atomic by specification; on Windows two renames
+    // onto one target can transiently collide, which Apply() reports (and the next
+    // launch retries) rather than corrupts: what must hold everywhere is that at
+    // least one write lands, nothing is ever partial, and nothing is left behind.
+
+    TEST_F(CompatAliasFileTest, ConcurrentApplyNeverExposesAPartialAliasOrLeavesTemps) {
+        // A big-enough "DLL" that a write takes real time, marker included.
+        const std::string bigDll = kOurDll + std::string(1024 * 1024, 'x');
+        Write(SourceDll(), bigDll);
+        Write(SourceToml(), kToml);
+
+        constexpr int kRounds  = 4;
+        constexpr int kThreads = 8;
+        for (int round = 0; round < kRounds; ++round) {
+            std::error_code ignored;
+            fs::remove(AliasDll(), ignored);
+            fs::remove(AliasToml(), ignored);
+
+            std::atomic<bool> stop{ false };
+            std::atomic<int> partialObservations{ 0 };
+            std::thread observer([&] {
+                while (!stop.load()) {
+                    std::error_code e;
+                    const auto size = fs::file_size(AliasDll(), e);
+                    if (!e && size != bigDll.size()) ++partialObservations;
+                }
+            });
+
+            std::atomic<int> failures{ 0 };
+            std::atomic<int> successes{ 0 };
+            std::vector<std::thread> writers;
+            for (int i = 0; i < kThreads; ++i)
+                writers.emplace_back([&] {
+                    const auto r = CompatAliasLogic::Apply(true, dir_, "9999");
+                    if (r.dll.error || r.toml.error) ++failures;
+                    if (r.dll.written && r.toml.written) ++successes;
+                });
+            for (auto& t : writers) t.join();
+            stop = true;
+            observer.join();
+
+            EXPECT_GE(successes.load(), 1) << "round " << round;
+#ifndef _WIN32
+            EXPECT_EQ(failures.load(), 0) << "round " << round;
+#endif
+            EXPECT_EQ(partialObservations.load(), 0) << "round " << round;
+            EXPECT_EQ(Read(AliasDll()), bigDll) << "round " << round;
+            EXPECT_EQ(Read(AliasToml()), CompatAliasLogic::BuildTomlAlias(kToml)) << "round " << round;
+            EXPECT_TRUE(TempFiles().empty()) << "round " << round;
+        }
+    }
+
+    // ── Orphaned temp files (a process killed mid-write) ────────────────────
+
+    TEST_F(CompatAliasFileTest, StaleTempsFromAKilledWriterAreSweptAndFreshOnesKept) {
         WriteSources();
-        fs::create_directories(dir_ / "OpenSteamTool.dll.amethyst-tmp");
+        const fs::path staleDll  = dir_ / "OpenSteamTool.dll.1234-0-99.amethyst-tmp";
+        const fs::path staleToml = dir_ / "opensteamtool.toml.1234-1-99.amethyst-tmp";
+        const fs::path legacy    = dir_ / "OpenSteamTool.dll.amethyst-tmp";   // fixed name (script / early builds)
+        const fs::path fresh     = dir_ / "OpenSteamTool.dll.5678-0-99.amethyst-tmp";  // a live writer's
+        Write(staleDll, "partial");  Write(staleToml, "partial");  Write(legacy, "partial");
+        Write(fresh, "in progress");
+        Age(staleDll, std::chrono::hours(2));
+        Age(staleToml, std::chrono::hours(2));
+        Age(legacy, std::chrono::hours(2));
 
-        CompatAliasLogic::ApplyResult r;
-        EXPECT_NO_THROW(r = CompatAliasLogic::Apply(true, dir_));
+        const auto r = CompatAliasLogic::Apply(true, dir_, "1");
 
-        EXPECT_EQ(r.dll.decision, Decision::Create);
-        EXPECT_FALSE(r.dll.written);
-        EXPECT_TRUE(static_cast<bool>(r.dll.error));
-        EXPECT_FALSE(fs::exists(AliasDll()));
-        EXPECT_TRUE(r.toml.written);
+        EXPECT_EQ(r.staleTempsRemoved, 3u);
+        EXPECT_FALSE(fs::exists(staleDll));
+        EXPECT_FALSE(fs::exists(staleToml));
+        EXPECT_FALSE(fs::exists(legacy));
+        EXPECT_TRUE(fs::exists(fresh));                       // might be another process's live temp
+        EXPECT_EQ(Read(fresh), "in progress");
+        // And the aliases themselves came out right regardless.
+        EXPECT_EQ(Read(AliasDll()), kOurDll);
+        EXPECT_EQ(Read(AliasToml()), CompatAliasLogic::BuildTomlAlias(kToml));
+    }
+
+    TEST_F(CompatAliasFileTest, SweepOnlyTouchesExactTempShapes) {
+        const fs::path unrelated1 = dir_ / "OpenSteamTool.dll.bak";
+        const fs::path unrelated2 = dir_ / "something.amethyst-tmp";            // not an alias temp
+        const fs::path unrelated3 = dir_ / "OpenSteamTool.dllX.amethyst-tmp";   // alias name + junk, no '.'
+        const fs::path unrelated4 = dir_ / "amethysttool.toml.1-0-0.amethyst-tmp";  // the SOURCE's name, not an alias
+        const fs::path realAlias  = dir_ / "OpenSteamTool.dll";
+        const fs::path dirLookalike = dir_ / "OpenSteamTool.dll.7-0-0.amethyst-tmp";
+        Write(unrelated1, "x"); Write(unrelated2, "x"); Write(unrelated3, "x");
+        Write(unrelated4, "x"); Write(realAlias, kOurDll);
+        fs::create_directories(dirLookalike);
+        for (const auto& p : { unrelated1, unrelated2, unrelated3, unrelated4, realAlias })
+            Age(p, std::chrono::hours(48));
+        Age(dirLookalike, std::chrono::hours(48));
+
+        EXPECT_EQ(CompatAliasLogic::RemoveStaleTemps(dir_), 0u);
+
+        for (const auto& p : { unrelated1, unrelated2, unrelated3, unrelated4, realAlias })
+            EXPECT_TRUE(fs::exists(p)) << p;
+        EXPECT_TRUE(fs::is_directory(dirLookalike));          // a directory is never removed
+    }
+
+    TEST_F(CompatAliasFileTest, SweepAgeBoundaryAndMissingDirectory) {
+        const fs::path t = dir_ / "opensteamtool.toml.1-0-0.amethyst-tmp";
+        Write(t, "x");
+        Age(t, std::chrono::hours(1));
+        // Older than a 2h threshold? No -> kept. Older than 30min? Yes -> removed.
+        EXPECT_EQ(CompatAliasLogic::RemoveStaleTemps(dir_, std::chrono::hours(2)), 0u);
+        EXPECT_TRUE(fs::exists(t));
+        EXPECT_EQ(CompatAliasLogic::RemoveStaleTemps(dir_, std::chrono::minutes(30)), 1u);
+        EXPECT_FALSE(fs::exists(t));
+        // A directory that is not there is not an error.
+        EXPECT_EQ(CompatAliasLogic::RemoveStaleTemps(dir_ / "nope"), 0u);
+    }
+
+    TEST_F(CompatAliasFileTest, DisabledNeverSweeps) {
+        const fs::path stale = dir_ / "OpenSteamTool.dll.1-0-0.amethyst-tmp";
+        Write(stale, "x");
+        Age(stale, std::chrono::hours(48));
+        const auto r = CompatAliasLogic::Apply(false, dir_, "1");
+        EXPECT_EQ(r.staleTempsRemoved, 0u);
+        EXPECT_TRUE(fs::exists(stale));                       // enabled = false means zero I/O
     }
 
     TEST_F(CompatAliasFileTest, DecideHelpersAreReadOnly) {
