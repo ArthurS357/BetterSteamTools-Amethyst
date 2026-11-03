@@ -131,23 +131,6 @@ namespace PatternRefreshLogic {
         return true;
     }
 
-    // H-1 (v1.3.4 audit): a candidate TOML may only ADD or FIX the functions
-    // that are missing right now; every other entry the cache already had must
-    // be byte-identical (name + rva + sig) in the candidate. Otherwise a mirror
-    // could silently move hooks that work today. Fail-closed: an existing entry
-    // that is absent from the candidate is inconsistent too.
-    [[nodiscard]] inline bool EntriesAreConsistent(const EntryMap& existing,
-                                                   const EntryMap& candidate,
-                                                   const std::unordered_set<uint32_t>& missingKeys) noexcept
-    {
-        for (const auto& [key, entry] : existing) {
-            if (missingKeys.count(key) != 0) continue;   // missing: may be fixed
-            const auto it = candidate.find(key);
-            if (it == candidate.end() || !SameEntry(entry, it->second)) return false;
-        }
-        return true;
-    }
-
     // A candidate RVA can only "resolve" a missing function if it points inside
     // the loaded module image; anything else is treated as unresolvable
     // (fail-closed) instead of being counted as a fix.
@@ -156,24 +139,61 @@ namespace PatternRefreshLogic {
         return rva != 0 && rva < imageSize;
     }
 
+    // H-1 (v1.3.4 audit): a candidate TOML may only ADD or FIX the functions
+    // that are missing right now; every other entry the cache already had must
+    // be byte-identical (name + rva + sig) in the candidate. Otherwise a mirror
+    // could silently move hooks that work today. Fail-closed: an existing entry
+    // that is absent from the candidate is inconsistent too.
+    //
+    // H-1b (v1.3.5 backlog): the same applies to entries the candidate ADDS
+    // outside the missing set -- e.g. an optional function the cache never had.
+    // Those are neither compared against an existing entry nor probed by the
+    // caller (which only probes the missing REQUIRED functions), yet the live
+    // lookup would use their RVA on the next launch without any image check. So
+    // any such new entry that carries an RVA must land inside the module image
+    // (`imageSize`; pass 0 when it is unknown -> every such RVA is refused). A
+    // signature-only entry is safe: the scan simply finds nothing. Entries for
+    // MISSING keys are not judged here; the caller probes those and counts the
+    // bad ones as unresolvable.
+    [[nodiscard]] inline bool EntriesAreConsistent(const EntryMap& existing,
+                                                   const EntryMap& candidate,
+                                                   const std::unordered_set<uint32_t>& missingKeys,
+                                                   std::size_t imageSize) noexcept
+    {
+        for (const auto& [key, entry] : existing) {
+            if (missingKeys.count(key) != 0) continue;   // missing: may be fixed
+            const auto it = candidate.find(key);
+            if (it == candidate.end() || !SameEntry(entry, it->second)) return false;
+        }
+        for (const auto& [key, entry] : candidate) {
+            if (existing.count(key) != 0 || missingKeys.count(key) != 0) continue;
+            if (entry.rva != 0 && !IsRvaWithinImage(entry.rva, imageSize)) return false;
+        }
+        return true;
+    }
+
     // Full replacement decision used by PatternLoader. On top of the key-set
     // rules above:
-    //   * EntriesAreConsistent (working entries untouched -- H-1);
+    //   * EntriesAreConsistent (working entries untouched -- H-1; no new entry
+    //     with an out-of-image RVA -- H-1b, judged against `imageSize`);
     //   * no NEW or CHANGED entry for a missing function may be unresolvable
     //     (missesUnresolvableInCandidate == 0, counted by the caller): a
     //     candidate that ships a bad entry for one missing function is refused
     //     even if it fixes another, because the next launch would hook that bad
     //     entry. An entry identical to the cached one is not counted -- it is
     //     today's state and already installs no hook.
+    // `imageSize` is last (and has no default) so a caller that forgets it fails
+    // to compile instead of silently skipping the H-1b check.
     [[nodiscard]] inline bool ShouldReplaceCache(const EntryMap& existing,
                                                  const EntryMap& candidate,
                                                  const std::unordered_set<uint32_t>& missingKeys,
                                                  bool bodyDiffers,
                                                  size_t missesResolvedByCandidate,
-                                                 size_t missesUnresolvableInCandidate)
+                                                 size_t missesUnresolvableInCandidate,
+                                                 size_t imageSize)
     {
         if (missesUnresolvableInCandidate != 0) return false;
-        if (!EntriesAreConsistent(existing, candidate, missingKeys)) return false;
+        if (!EntriesAreConsistent(existing, candidate, missingKeys, imageSize)) return false;
 
         std::unordered_set<uint32_t> existingKeys;
         std::unordered_set<uint32_t> candidateKeys;

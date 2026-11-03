@@ -35,9 +35,11 @@ namespace RemoteToml {
     // cache, with caller-chosen (short) timeouts. Used by PatternLoader's
     // background revalidation; never call it on Steam's loader path.
     // requireHttps=true skips (and logs) every mirror URL that is not https://.
-    RemoteBody FetchRemoteOnly(const Request& request, const std::string& sha256,
-                               uint32_t timeoutMs, uint32_t recvTimeoutMs,
-                               bool requireHttps = false);
+    // [[nodiscard]]: the body is the whole point -- dropping it would silently
+    // turn a revalidation / corrupt-cache refetch into a wasted network request.
+    [[nodiscard]] RemoteBody FetchRemoteOnly(const Request& request, const std::string& sha256,
+                                             uint32_t timeoutMs, uint32_t recvTimeoutMs,
+                                             bool requireHttps = false);
 
     // Replaces cachePath atomically (temp file + MoveFileExW REPLACE_EXISTING |
     // WRITE_THROUGH). On failure the previous file is left untouched and false is

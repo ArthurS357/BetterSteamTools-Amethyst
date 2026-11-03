@@ -176,6 +176,12 @@ paths = []
 [remote]
 # url_template = "https://tu.servidor/{channel}/{component}/{sha256}.toml"
 ```
+
+Modo de compatibilidad con Denuvo (desactivado por defecto). Consulta "Modo de compatibilidad con Denuvo" más abajo.
+```toml
+[compatibility]
+denuvo_aliases = false
+```
 ### Migración de configuración
 
 Si actualizas desde el OpenSteamTools upstream (que leía `opensteamtool.toml`), tu configuración se conserva automáticamente. En el primer inicio, si **no** existe `amethysttool.toml` junto a `steam.exe` pero sí existe allí un `opensteamtool.toml`, AmethystTool lo copia a `amethysttool.toml` y registra `Migrated config from opensteamtool.toml to amethysttool.toml`.
@@ -185,6 +191,35 @@ Si actualizas desde el OpenSteamTools upstream (que leía `opensteamtool.toml`),
 - Solo cambia el nombre del archivo; las claves y valores del TOML permanecen intactos.
 
 Si no existe ninguno de los dos archivos, se usan los valores predeterminados integrados (no se crea ningún archivo).
+
+### Modo de compatibilidad con Denuvo
+
+El flujo oficial de activación de Denuvo (TokeerDRM + **LuaTools Validator**) solo reconoce el motor upstream por sus nombres de archivo junto a `steam.exe`. Como este fork usa `AmethystTool.dll` / `amethysttool.toml`, el validador se detiene con *"Set up your activation engine first"*. `[compatibility]` lo resuelve sin cambiar la identidad del fork:
+
+```toml
+[compatibility]
+denuvo_aliases = true
+```
+
+Al iniciar Steam, AmethystTool crea dos **alias** junto a `steam.exe`:
+
+| Alias | Contenido |
+|---|---|
+| `OpenSteamTool.dll` | copia byte a byte de `AmethystTool.dll` |
+| `opensteamtool.toml` | copia de `amethysttool.toml` con una cabecera marcadora de 3 líneas |
+
+- **Cuándo activarlo:** solo si generas tickets de Denuvo con LuaTools Validator. Para todo lo demás, déjalo en `false` (valor por defecto).
+- **La privacidad y el comportamiento no cambian.** AmethystTool sigue cargándose como `AmethystTool.dll` y leyendo `amethysttool.toml`; nada en AmethystTool lee los alias. La función no accede a la red ni al registro: son solo dos copias de archivos locales. Nuestros proxies `dwmapi.dll` / `xinput1_4.dll` nunca cargan `OpenSteamTool.dll`, y si algo más la cargara, la copia queda inerte (solo se ejecuta una imagen de AmethystTool por proceso de Steam).
+- **Nunca sobrescribe una instalación real de OpenSteamTool.** Un `OpenSteamTool.dll` / `opensteamtool.toml` existente que AmethystTool no creó se deja intacto y se registra una advertencia. Los alias creados por AmethystTool se actualizan solos tras una actualización.
+- **A prueba de fallos.** Si un alias no se puede escribir (permisos, disco lleno), se registra el error y AmethystTool arranca con normalidad.
+- **Desactivarlo:** `denuvo_aliases = false` deja de mantener los alias pero no los borra; elimínalos a mano o con el script de abajo. La clave se lee al iniciar Steam (sin recarga en caliente).
+
+**Sin editar el TOML:** el ZIP de la versión incluye `enable-denuvo-compat.ps1`. Ejecútalo una vez (la ruta de Steam se lee del registro; puedes forzarla con `-SteamPath`) y luego ejecuta el validador. `-Remove` vuelve a borrar los alias (solo los que creó AmethystTool).
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\enable-denuvo-compat.ps1
+powershell -ExecutionPolicy Bypass -File .\enable-denuvo-compat.ps1 -Remove
+```
 
 ### Manifiest a través de Lua
 

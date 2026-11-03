@@ -99,6 +99,16 @@
 # behind PatternLoader::FindPattern / FindPatternOptional) is header-only and
 # takes the lookup as a callable -- no TOML, module scan or popup involved.
 #
+# CompatAliasLogic.cpp (the [compatibility] denuvo_aliases decision + temp-and-
+# rename file writes behind dllmain.cpp's ApplyCompatibilityAliases, v1.3.5)
+# needs only <filesystem>/<fstream>, the same footprint as ConfigMigration.cpp;
+# its non-ASCII-path test also uses Encoding.cpp, already compiled below.
+#
+# AchievementsLogic.cpp / RichPresenceLogic.cpp (the hold/rebuild/skip and
+# track/inject decisions, and the KV1 parser, behind Hooks_NetPacket.cpp) need
+# only <cstdint>, <chrono>, <string> and <vector> -- no protobuf, no LuaConfig,
+# no CloudRedirectHost. They are also compiled by the Linux CI.
+#
 # PatternRefreshLogic.h (when a cached pattern TOML may be revalidated and
 # whether a downloaded copy may replace it) and Tickets/ForgeBaseCache.h (the
 # account-keyed forge base slot + ticket-ownership predicate) are header-only
@@ -135,6 +145,9 @@ add_executable(AmethystToolTests
     remote_toml_load_source_test.cpp
     forge_base_cache_test.cpp
     pattern_refresh_logic_test.cpp
+    compat_alias_logic_test.cpp
+    achievements_logic_test.cpp
+    rich_presence_logic_test.cpp
 
     # Units under test, compiled directly (no OSTPlatform lib link) — see header.
     "${_ostp}/Numbers.cpp"
@@ -143,6 +156,8 @@ add_executable(AmethystToolTests
     # ConfigMigration depends only on <filesystem>; compiled directly so the test
     # stays free of the Lua/toml/WinHTTP coupling of the rest of Utils/Config.
     "${CMAKE_CURRENT_SOURCE_DIR}/../Utils/Config/ConfigMigration.cpp"
+    # [compatibility] denuvo_aliases logic; same <filesystem>-only footprint.
+    "${CMAKE_CURRENT_SOURCE_DIR}/../Utils/Config/CompatAliasLogic.cpp"
     # Pure parsing logic split out of AppTicket.cpp / TokeerBridge.cpp precisely
     # so it compiles here without Hooks_Decryption/LuaConfig/Http/Dialog.
     "${CMAKE_CURRENT_SOURCE_DIR}/../Utils/Tickets/TicketParsing.cpp"
@@ -170,6 +185,11 @@ add_executable(AmethystToolTests
     # UnpackRaw + CNetPacket layout probe/resolver, split out of
     # Hooks_NetPacket.cpp; IsReadable is the probe's memory check.
     "${CMAKE_CURRENT_SOURCE_DIR}/../Hook/NetPacketLogic.cpp"
+    # Achievement hold/rebuild/skip and RichPresence track/inject decisions (plus
+    # the binary-KV1 parser), split out of Hooks_NetPacket.cpp; <cstdint>/<chrono>
+    # only, so they also build in the Linux CI (see .github/workflows/).
+    "${CMAKE_CURRENT_SOURCE_DIR}/../Hook/AchievementsLogic.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../Hook/RichPresenceLogic.cpp"
     "${_ostp}/Windows/MemoryQuery.cpp"
     # Binary-KeyValues schema/stats join behind LocalAchievements::Read, split
     # out so it compiles here without dllmain.h, spdlog or any file IO.

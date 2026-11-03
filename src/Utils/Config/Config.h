@@ -72,6 +72,7 @@ namespace Config {
     DonateSettings GetDonateSettings();
     bool GetStatsEnableApi();
     bool GetUpdateEnabled();
+    bool GetCompatDenuvoAliases();
 
     // [manifest] — provider selection lives in ManifestClient (table-driven).
     inline uint32_t manifestTimeoutResolve = 5000;
@@ -135,5 +136,12 @@ namespace Config {
     // from this feature: no wanted-list GET, no passive capture, no submit
     // POST. See DonateSettings above and ManifestDonor.h.
     inline DonateSettings donate;
+
+    // [compatibility] denuvo_aliases (v1.3.5) - OFF by default. When true,
+    // dllmain.cpp drops OpenSteamTool.dll / opensteamtool.toml alias copies
+    // next to steam.exe at startup so external activation tooling (LuaTools
+    // Validator) recognises the engine. Read once at startup; the aliases are
+    // never read by AmethystTool itself. See CompatAliasLogic.h.
+    inline bool compatDenuvoAliases = false;
 
 }

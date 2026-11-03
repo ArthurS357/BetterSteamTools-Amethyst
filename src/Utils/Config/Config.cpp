@@ -52,6 +52,8 @@ namespace {
         // enabled=false (struct default) = ManifestDonor disabled entirely:
         // no wanted-list GET, no passive capture, no submit POST.
         DonateSettings donate;
+        // [compatibility] denuvo_aliases -- false = no alias files are written.
+        bool compatDenuvoAliases = false;
     };
 
     std::mutex g_mutex;
@@ -100,6 +102,7 @@ namespace {
         cloudLibrary           = snapshot.cloud.library;
         cacheUrl               = snapshot.cacheUrl;
         donate                 = snapshot.donate;
+        compatDenuvoAliases    = snapshot.compatDenuvoAliases;
     }
 
     void ApplyManifestProvider(const std::string& provider) {
@@ -295,6 +298,12 @@ namespace {
                              w.key, w.value, w.lo, w.hi, w.kept);
             }
 
+            // [compatibility] -- denuvo_aliases=false (default) writes nothing.
+            if (auto compat = tbl["compatibility"].as_table()) {
+                if (auto val = (*compat)["denuvo_aliases"].value<bool>())
+                    snapshot.compatDenuvoAliases = *val;
+            }
+
             ApplyManifestProvider(snapshot.manifestProvider);
             ManifestClient::SetUrlTemplateOverride(snapshot.manifestUrlTemplate);
             ApplyHttpUserAgent(snapshot.httpUserAgent);
@@ -396,6 +405,11 @@ namespace {
     DonateSettings GetDonateSettings() {
         const std::lock_guard lock(g_mutex);
         return donate;
+    }
+
+    bool GetCompatDenuvoAliases() {
+        const std::lock_guard lock(g_mutex);
+        return compatDenuvoAliases;
     }
 
 }

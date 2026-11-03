@@ -53,6 +53,30 @@ A virtual machine is the safest option; a spare physical machine works too.
    - `main.log` contains `Migrated config from opensteamtool.toml to amethysttool.toml` (Debug build).
 5. Re-launch and confirm the migration does **not** run again and does not overwrite your `amethysttool.toml`.
 
+**Testing Denuvo compatibility mode.** To verify `[compatibility] denuvo_aliases` ([README → Denuvo compatibility mode](README.md#denuvo-compatibility-mode)):
+
+1. Make sure there is no `OpenSteamTool.dll` / `opensteamtool.toml` in the Steam root (rename them aside if you have a real upstream install you want to keep).
+2. Set `[compatibility] denuvo_aliases = true` in `amethysttool.toml` and launch Steam.
+3. Confirm:
+   - `OpenSteamTool.dll` exists and is byte-identical to `AmethystTool.dll` (`Get-FileHash` on both).
+   - `opensteamtool.toml` starts with `# AmethystTool compatibility alias` followed by your `amethysttool.toml`.
+   - `main.log` contains `[compatibility] OpenSteamTool.dll alias written (create)` (Debug build), and only **one** `AmethystTool init thread started` line.
+4. Run the LuaTools Validator: it must no longer report *"Set up your activation engine first"*.
+5. Guard checks: put any other file (e.g. a text file) at `OpenSteamTool.dll`, relaunch, and confirm it is **not** overwritten and the log shows `...is not an AmethystTool alias...left untouched`.
+6. Script path: with `denuvo_aliases = false`, run `enable-denuvo-compat.ps1`, then `enable-denuvo-compat.ps1 -Remove`, and confirm both aliases appear and then disappear.
+
+### Unit tests without Windows
+
+The pure-logic unit tests also build on Linux (no MSVC, no Steam), which is what the `Linux logic tests` GitHub Action runs on every push:
+
+```bash
+cmake -S src/tests/linux -B build-linux-tests -G Ninja -DLINUX_TESTS_SANITIZE=ON
+cmake --build build-linux-tests
+./build-linux-tests/LinuxLogicTests
+```
+
+It needs only a C++20 compiler, CMake and GoogleTest (`sudo apt-get install g++ cmake ninja-build libgtest-dev`). It covers the tests that need nothing from Windows; the full suite (`AmethystToolTests`, built by `build.ps1`) is still the one that counts before a release. The list of what runs where is at the top of `src/tests/linux/CMakeLists.txt`.
+
 ## 5. Check the logs
 
 Debug builds write per-module log files to **`<Steam>\amethysttool\`** (inside the Steam install directory, next to `steam.exe` — not under `%AppData%`). Start with:

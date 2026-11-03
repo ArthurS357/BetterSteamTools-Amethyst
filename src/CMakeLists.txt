@@ -126,6 +126,7 @@ add_library(AmethystTool SHARED
     Utils/Achievements/LocalAchievementsLogic.cpp
     Utils/Config/Config.cpp
     Utils/Config/ConfigMigration.cpp
+    Utils/Config/CompatAliasLogic.cpp
     Utils/Config/DonateConfigLogic.cpp
     Utils/Config/ConfigFileWatcher.cpp
     Utils/Config/LuaConfig.cpp
@@ -174,6 +175,8 @@ add_library(AmethystTool SHARED
     Hook/OnlineFixLogic.cpp
     Hook/LicenseListLogic.cpp
     Hook/NetPacketLogic.cpp
+    Hook/AchievementsLogic.cpp
+    Hook/RichPresenceLogic.cpp
     Hook/Hooks_NetPacket.cpp
     Hook/PendingAPICalls.cpp
     Hook/Hooks_SteamUI.cpp

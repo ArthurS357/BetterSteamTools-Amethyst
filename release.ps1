@@ -165,6 +165,7 @@ $artifacts = @(
     @{ Source = Join-Path $RepoRoot 'README.md';                 Dest = 'README.md' }
     @{ Source = Join-Path $RepoRoot 'TESTING.md';                Dest = 'TESTING.md' }
     @{ Source = Join-Path $RepoRoot 'AV_WHITELIST.md';           Dest = 'AV_WHITELIST.md' }
+    @{ Source = Join-Path $RepoRoot 'tools\enable-denuvo-compat.ps1'; Dest = 'enable-denuvo-compat.ps1' }
 )
 
 $missing = $artifacts | Where-Object { -not (Test-Path -LiteralPath $_.Source) }
@@ -219,6 +220,9 @@ anti-cheat/anti-fraud systems look for.
 If your antivirus quarantines these DLLs, see AV_WHITELIST.md - this is a
 known, expected false positive for injection/hooking code, not a sign the
 files are unsafe.
+
+Denuvo tickets via LuaTools Validator: run enable-denuvo-compat.ps1 (or set
+[compatibility] denuvo_aliases = true) - see README.md, "Denuvo compatibility mode".
 
 Full documentation: README.md
 "@

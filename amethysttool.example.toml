@@ -230,3 +230,24 @@ enabled = false
 # miss sends (DLL SHA-256 + component in the URL, nothing else).
 # false = never revalidate (exact pre-v1.3.4 network behaviour).
 # revalidate = true
+
+[compatibility]
+# Denuvo compatibility mode (v1.3.5). Creates aliases OpenSteamTool.dll /
+# opensteamtool.toml next to steam.exe for official activation tooling
+# (LuaTools Validator) that only recognises the upstream engine by those file
+# names ("Set up your activation engine first").
+#
+# - Does NOT replace the fork's DLL: AmethystTool keeps loading as
+#   AmethystTool.dll and keeps reading amethysttool.toml. Nothing in
+#   AmethystTool reads the aliases, and no extra network or registry activity
+#   happens -- it is two local file copies at Steam startup.
+# - Never overwrites a real OpenSteamTool install: an existing
+#   OpenSteamTool.dll / opensteamtool.toml that AmethystTool did not create is
+#   left untouched (a warning is logged).
+# - Turning it back to false stops refreshing the aliases but does not delete
+#   them; delete them by hand or run enable-denuvo-compat.ps1 -Remove.
+# - Prefer not to edit this file? Run enable-denuvo-compat.ps1 (shipped in the
+#   release ZIP) once instead.
+# Only enable it if you generate Denuvo tickets through LuaTools Validator.
+# Off by default. Read at Steam startup (not hot-reloaded).
+denuvo_aliases = false

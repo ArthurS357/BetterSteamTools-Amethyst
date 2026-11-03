@@ -366,6 +366,11 @@ void Revalidate(const RevalidationJob& job, bool enabled)
     std::unordered_set<uint32_t> missingKeys;
     size_t resolved = 0;
     size_t unresolvable = 0;
+    // H-1b: entries the candidate ADDS outside the missing set (e.g. an optional
+    // function) are not probed below, so EntriesAreConsistent checks their RVAs
+    // against the image size. 0 = image unreadable -> fail-closed (refuse them).
+    const auto image = OSTPlatform::Memory::GetModuleImage(job.module);
+    const size_t imageSize = image ? image->size : 0;
     for (const std::string& name : job.missing) {
         const uint32_t key = Fnv1aHash(name.c_str());
         missingKeys.insert(key);
@@ -379,14 +384,16 @@ void Revalidate(const RevalidationJob& job, bool enabled)
         }
     }
 
-    if (!EntriesAreConsistent(job.cachedMap, remoteMap, missingKeys)) {
+    if (!EntriesAreConsistent(job.cachedMap, remoteMap, missingKeys, imageSize)) {
         LOG_WARN("PatternLoader: {} revalidation: mirror copy alters or drops entries that "
-                 "work today; refused (only missing functions may change)", job.info.component);
+                 "work today, or adds an entry whose RVA lies outside the module image; "
+                 "refused (only missing functions may change)", job.info.component);
         return;
     }
 
     const bool differs = remote.body != job.info.cachedBody;
-    if (!ShouldReplaceCache(job.cachedMap, remoteMap, missingKeys, differs, resolved, unresolvable)) {
+    if (!ShouldReplaceCache(job.cachedMap, remoteMap, missingKeys, differs, resolved, unresolvable,
+                            imageSize)) {
         LOG_INFO("PatternLoader: {} revalidation: mirror copy is not an improvement "
                  "(differs={} entries={} resolves {}/{} missing, {} unresolvable{}{}); keeping cache",
                  job.info.component, differs, remoteMap.size(), resolved, job.missing.size(),
