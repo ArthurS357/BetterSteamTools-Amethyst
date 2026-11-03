@@ -7,7 +7,10 @@ Base: v1.3.4 (`f9aa1f7`).
 - **New: Denuvo compatibility mode.** LuaTools Validator (the official TokeerDRM ticket flow) only recognises the upstream engine by its file names, so AmethystTool users were stopped with *"Set up your activation engine first"*. Turn on `[compatibility] denuvo_aliases = true` (or run `enable-denuvo-compat.ps1` once) and AmethystTool places `OpenSteamTool.dll` / `opensteamtool.toml` aliases next to `steam.exe`. The validator passes; AmethystTool itself keeps running as `AmethystTool.dll` with `amethysttool.toml`.
 - **New: `enable-denuvo-compat.ps1`** in the release ZIP, for users who would rather not edit the TOML. `-Remove` cleans up afterwards.
 - **Hardening: one AmethystTool per Steam process.** If anything ever loads a second copy of the DLL (such as the alias), that copy stays inert instead of hooking Steam twice.
-- **Tests:** 20 new unit tests (expected total 276).
+- **Hardening: concurrent alias writers.** Each write now has its own temp file, so two `steam.exe` processes starting together can no longer expose a partial alias; orphaned temps from a killed process are swept.
+- **Hardening: pattern revalidation (H-1b).** A mirror copy can no longer add an entry with an out-of-image RVA outside the missing functions.
+- **Internal:** achievement and rich-presence *decisions* moved out of `Hooks_NetPacket.cpp` into testable headers; a Linux CI now runs the pure-logic tests on every push.
+- **Tests:** 93 new unit tests (expected total **349**).
 
 ## How the validator detects the engine
 
@@ -39,7 +42,7 @@ If that ever shows a `Get-Process steam | ... .Modules` or a registry lookup, th
 
 Pending local validation (written without a Windows toolchain):
 
-- `.\build.ps1 -Clean`: Release + Debug, expected **276/276** tests in each (256 + 20 new in `compat_alias_logic_test.cpp`).
+- `.\build.ps1 -Clean`: Release + Debug, expected **349/349** tests in each (256 + 93 new). Checked off Windows only: the 259-test Linux suite and a mingw syntax pass over the touched files -- the `Hooks_NetPacket.cpp` / `dllmain.cpp` / `PatternLoader.cpp` integrations have not been built with MSVC.
 - Expected warnings: unchanged from baseline (Release 9 / Debug 8).
 - ABI: `TokeerUri` at ordinal 1. CRT: static `/MT`.
 - Manual: see `TESTING.md` → *Testing Denuvo compatibility mode*.

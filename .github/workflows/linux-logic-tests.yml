@@ -1,0 +1,58 @@
+name: Linux logic tests
+
+# Builds and runs the pure-logic unit tests on Linux (no MSVC, no Windows runner).
+#
+# AmethystTool itself is Windows-only, but its decision logic is split into
+# dependency-light units (see src/tests/CMakeLists.txt). src/tests/linux/ builds
+# the subset of those that needs nothing but the C++ standard library + GoogleTest,
+# under AddressSanitizer + UndefinedBehaviorSanitizer. This is a fast early signal
+# on EVERY push (including the cloud/feature branches); it does not replace the
+# Windows `CI` workflow, which builds the real DLL and the full test executable.
+
+on:
+  push:             # every branch, on purpose: the point is to check cloud pushes
+  pull_request:
+  workflow_dispatch:
+
+# A newer push to the same ref makes the older run obsolete.
+concurrency:
+  group: linux-logic-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  logic-tests:
+    name: Pure-logic tests (ubuntu, ASan + UBSan)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends g++ cmake ninja-build libgtest-dev
+
+      - name: Configure
+        run: >
+          cmake -S src/tests/linux -B build-linux-tests -G Ninja
+          -DCMAKE_BUILD_TYPE=Debug -DLINUX_TESTS_SANITIZE=ON
+
+      - name: Build
+        run: cmake --build build-linux-tests
+
+      - name: Run tests
+        run: ./build-linux-tests/LinuxLogicTests --gtest_color=yes --gtest_output=xml:linux-logic-tests.xml
+
+      # Kept even on failure so the failing case can be read without re-running.
+      - name: Upload test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-logic-tests-report
+          path: linux-logic-tests.xml
+          if-no-files-found: ignore
+          retention-days: 7

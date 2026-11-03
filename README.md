@@ -11,6 +11,9 @@
     <img src="https://img.shields.io/badge/C%2B%2B-20%2B-2ea44f?logo=cplusplus&logoColor=white" alt="C++ 20+">
     <img src="https://img.shields.io/badge/CMake-3.20%2B-2ea44f?logo=cmake&logoColor=white" alt="CMake 3.20+">
     <img src="https://img.shields.io/badge/Windows-only-d73a49?logo=windows&logoColor=white" alt="Windows only">
+    <a href="https://github.com/ArthurS357/BetterSteamTools-Amethyst/actions/workflows/linux-logic-tests.yml">
+      <img src="https://github.com/ArthurS357/BetterSteamTools-Amethyst/actions/workflows/linux-logic-tests.yml/badge.svg" alt="Linux logic tests">
+    </a>
     <a href="https://deepwiki.com/OpenSteam001/OpenSteamTool">
       <img src="https://deepwiki.com/badge.svg" alt="Ask DeepWiki">
     </a>
