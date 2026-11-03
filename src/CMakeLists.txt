@@ -126,6 +126,7 @@ add_library(AmethystTool SHARED
     Utils/Achievements/LocalAchievementsLogic.cpp
     Utils/Config/Config.cpp
     Utils/Config/ConfigMigration.cpp
+    Utils/Config/CompatAliasLogic.cpp
     Utils/Config/DonateConfigLogic.cpp
     Utils/Config/ConfigFileWatcher.cpp
     Utils/Config/LuaConfig.cpp

@@ -1,5 +1,6 @@
 #include "dllmain.h"
 #include "Hook/HookManager.h"
+#include "Utils/Config/CompatAliasLogic.h"
 #include "Utils/Config/Config.h"
 #include "Utils/Config/ConfigMigration.h"
 #include "Utils/Config/ConfigFileWatcher.h"
@@ -55,6 +56,44 @@ bool InitializeSteamComponents()
     return true;
 }
 
+// [compatibility] denuvo_aliases (v1.3.5). OFF by default: with the key false or
+// absent this does no I/O at all. When on, drops OpenSteamTool.dll /
+// opensteamtool.toml copies next to steam.exe for external activation tooling
+// (LuaTools Validator) that only recognises the upstream file names. Nothing in
+// AmethystTool reads the aliases. Fail-safe: any error is logged and init carries
+// on -- an alias problem must never keep the real DLL from working.
+static void ApplyCompatibilityAliases()
+{
+    if (!Config::GetCompatDenuvoAliases())
+        return;
+    try {
+        using CompatAliasLogic::DescribeDecision;
+        const auto r = CompatAliasLogic::Apply(
+            true, OSTPlatform::Encoding::Utf8ToPath(SteamInstallPath));
+
+        const auto report = []([[maybe_unused]] const char* name,
+                               const CompatAliasLogic::FileOutcome& f) {
+            if (f.written) {
+                LOG_INFO("[compatibility] {} alias written ({})", name, DescribeDecision(f.decision));
+            } else if (f.error) {
+                LOG_WARN("[compatibility] {} alias could not be written: {} (err={})",
+                         name, f.error.message(), f.error.value());
+            } else if (f.decision == CompatAliasLogic::Decision::Foreign) {
+                LOG_WARN("[compatibility] {} already exists and is not an AmethystTool alias "
+                         "(likely a real upstream install); left untouched", name);
+            } else if (f.decision == CompatAliasLogic::Decision::SourceMissing) {
+                LOG_WARN("[compatibility] {} alias skipped: source file not found", name);
+            } else {
+                LOG_DEBUG("[compatibility] {} alias {}", name, DescribeDecision(f.decision));
+            }
+        };
+        report("OpenSteamTool.dll", r.dll);
+        report("opensteamtool.toml", r.toml);
+    } catch (...) {
+        LOG_WARN("[compatibility] alias creation failed unexpectedly; continuing without aliases");
+    }
+}
+
 // All initialisation that touches the filesystem, loads modules, scans
 // memory, or installs detours runs here on a worker thread — we MUST NOT do
 // any of that from inside DllMain (loader lock).
@@ -84,6 +123,7 @@ static uint32_t InitThread(OSTPlatform::DynamicLibrary::ModuleHandle selfModule)
     Config::Load(ConfigPath);
     Log::InitModules();
     Log::InstallPlatformLogSink();
+    ApplyCompatibilityAliases();
     SteamDiagnostics::Initialize(SteamclientPath, SteamUIPath);
 
     // Load pattern files for steamclient64.dll and steamui.dll.
@@ -206,6 +246,32 @@ static bool IsSteamHost()
     return _wcsicmp(name, L"steam.exe") == 0;
 }
 
+// One active AmethystTool image per Steam process (v1.3.5). The
+// [compatibility] denuvo_aliases copy (OpenSteamTool.dll) is this same binary
+// under another name; our proxies never load it, but if anything else did (a
+// leftover upstream proxy, a manual rename next to the real DLL) two images
+// would install the same detours twice. The first image to create this
+// per-process name runs; any later image stays inert. Kernel32 object calls are
+// safe under the loader lock. Fail-open: if the mutex cannot be created at all
+// we behave exactly as before this guard existed.
+static HANDLE g_processClaim = nullptr;
+static bool   g_ownsProcess  = false;
+
+static bool ClaimProcessForThisImage()
+{
+    wchar_t name[64];
+    swprintf_s(name, L"Local\\AmethystTool.Active.%lu", GetCurrentProcessId());
+    HANDLE h = CreateMutexW(nullptr, FALSE, name);
+    if (!h)
+        return true;
+    if (GetLastError() == ERROR_ALREADY_EXISTS) {
+        CloseHandle(h);
+        return false;
+    }
+    g_processClaim = h;   // held until DLL_PROCESS_DETACH
+    return true;
+}
+
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD dwReason, PVOID pvReserved)
 {
     if (dwReason == DLL_PROCESS_ATTACH)
@@ -213,13 +279,16 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD dwReason, PVOID pvReserved)
         DisableThreadLibraryCalls(hModule);
         if (!IsSteamHost())
             return TRUE;   // e.g. rundll32 amethysttool:// handler — no injection here
+        if (!ClaimProcessForThisImage())
+            return TRUE;   // another AmethystTool image (e.g. the OpenSteamTool.dll alias) is already active
+        g_ownsProcess = true;
         // Hand off all real work to a worker thread to avoid running file I/O,
         // module loading and detour transactions under the loader lock.
         OSTPlatform::Thread::StartDetached([module = reinterpret_cast<OSTPlatform::DynamicLibrary::ModuleHandle>(hModule)] {
             return InitThread(module);
         });
     }
-    else if (dwReason == DLL_PROCESS_DETACH && IsSteamHost())
+    else if (dwReason == DLL_PROCESS_DETACH && IsSteamHost() && g_ownsProcess)
     {
         ConfigFileWatcher::Stop();
         LuaFileWatcher::Stop();
@@ -227,6 +296,10 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD dwReason, PVOID pvReserved)
         SteamUI::CoreUnhook();
         SteamClient::CoreUnhook();
         CloudRedirectHost::Shutdown();
+        if (g_processClaim) {
+            CloseHandle(g_processClaim);
+            g_processClaim = nullptr;
+        }
     }
 
     return TRUE;
