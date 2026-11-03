@@ -1,5 +1,23 @@
 # Changelog
 
+## [v1.3.5] - Unreleased
+
+> **Pending local validation:** written in a Linux session without a Windows build. Expected: 276/276 tests per configuration (256 + 20 new). Run `.\build.ps1 -Clean` before tagging.
+
+### Added
+- **Denuvo compatibility mode (`[compatibility] denuvo_aliases`, off by default).** The official Denuvo activation flow (TokeerDRM + LuaTools Validator) only recognises the upstream engine by its file names next to `steam.exe`, so fork users got *"Set up your activation engine first"*. When enabled, AmethystTool drops `OpenSteamTool.dll` (byte copy of `AmethystTool.dll`) and `opensteamtool.toml` (copy of `amethysttool.toml` behind a 3-line marker header) at Steam startup. Nothing in AmethystTool reads the aliases; no network or registry access is involved. Policy and file I/O in `Utils/Config/CompatAliasLogic.{h,cpp}`, called from `dllmain.cpp` (`ApplyCompatibilityAliases`) right after `Config::Load`.
+  - Never overwrites a file it did not create: an existing `OpenSteamTool.dll` is "ours" only if it contains the `amethysttool.toml` marker string (every fork build has it, upstream never does); an existing `opensteamtool.toml` only if it starts with the marker header. Anything else is left untouched and logged as a warning.
+  - Aliases it did create are refreshed when they differ (e.g. after an update), including a hand-renamed older `AmethystTool.dll`.
+  - Writes go to `<alias>.amethyst-tmp` and are renamed into place; every error is logged and init continues (fail-safe).
+  - `denuvo_aliases = false` stops maintaining the aliases but does not delete them. Read at startup only (not hot-reloaded).
+- **`tools/enable-denuvo-compat.ps1`** (shipped in the release ZIP as `enable-denuvo-compat.ps1`): one-shot fallback that creates the same aliases without editing the TOML (Steam path from `HKCU:\Software\Valve\Steam\SteamPath`, overridable with `-SteamPath`), same safety rules and byte-identical marker header as the DLL. `-Remove` deletes only aliases AmethystTool created.
+
+### Changed
+- **One active AmethystTool image per Steam process.** `DllMain` now claims a per-process named mutex (`Local\AmethystTool.Active.<pid>`) before starting the init thread; a second image of the same binary (e.g. the `OpenSteamTool.dll` alias loaded by a leftover upstream proxy) stays inert instead of installing every detour twice. `DLL_PROCESS_DETACH` cleanup runs only in the owning image. Fail-open: if the mutex cannot be created, behaviour is exactly as before.
+
+### Tests
+- 20 new tests in `compat_alias_logic_test.cpp`: decision matrix (6), content predicates (4), file behaviour (10) -- create, idempotent second run, real upstream install untouched, stale own copy refreshed, missing source DLL does not block the TOML alias, directory under the alias name, write failure reported without throwing and without a partial alias, read-only decide helpers, non-ASCII Steam path through `Utf8ToPath`.
+
 ## [v1.3.4] - 2026-11-02
 
 > **Validated locally:** `build.ps1 -Clean` Release + Debug, 256/256 tests per configuration (213 + 43 new), warnings Release 9 / Debug 8 (baseline), `TokeerUri` @ ordinal 1, static `/MT` CRT.

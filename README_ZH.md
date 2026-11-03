@@ -183,6 +183,12 @@ paths = []
 # url_template = "https://your.server/{channel}/{component}/{sha256}.toml"
 ```
 
+Denuvo 兼容模式（默认关闭）。参见下面的"Denuvo 兼容模式"。
+```toml
+[compatibility]
+denuvo_aliases = false
+```
+
 ### 配置迁移
 
 如果你从上游 OpenSteamTools（读取 `opensteamtool.toml`）升级而来，你的设置会被自动沿用。首次启动时，如果 `steam.exe` 旁**没有** `amethysttool.toml`，但存在 `opensteamtool.toml`，AmethystTool 会将其复制为 `amethysttool.toml`，并记录 `Migrated config from opensteamtool.toml to amethysttool.toml`。
@@ -192,6 +198,35 @@ paths = []
 - 仅文件名改变；TOML 的键和值保持不变。
 
 如果两个文件都不存在，则使用内置默认值（不会创建任何文件）。
+
+### Denuvo 兼容模式
+
+官方 Denuvo 激活流程（TokeerDRM + **LuaTools Validator**）只通过 `steam.exe` 旁的文件名识别上游引擎。由于本分支使用 `AmethystTool.dll` / `amethysttool.toml`，验证器会提示 *"Set up your activation engine first"*。`[compatibility]` 在不改变本分支身份的前提下解决此问题：
+
+```toml
+[compatibility]
+denuvo_aliases = true
+```
+
+Steam 启动时，AmethystTool 会在 `steam.exe` 旁创建两个**别名**：
+
+| 别名 | 内容 |
+|---|---|
+| `OpenSteamTool.dll` | `AmethystTool.dll` 的逐字节副本 |
+| `opensteamtool.toml` | `amethysttool.toml` 的副本，带 3 行标记头 |
+
+- **何时开启：** 仅当你通过 LuaTools Validator 生成 Denuvo 令牌时。其他情况请保持 `false`（默认值）。
+- **隐私和运行行为不变。** AmethystTool 仍以 `AmethystTool.dll` 加载并读取 `amethysttool.toml`；AmethystTool 不会读取这些别名。该功能不访问网络或注册表——只是两次本地文件复制。我们的 `dwmapi.dll` / `xinput1_4.dll` 代理从不加载 `OpenSteamTool.dll`；即使有其他程序加载它，该副本也保持惰性（每个 Steam 进程只运行一个 AmethystTool 映像）。
+- **绝不覆盖真正的 OpenSteamTool 安装。** 已存在且并非由 AmethystTool 创建的 `OpenSteamTool.dll` / `opensteamtool.toml` 会保持不变，并记录一条警告。由 AmethystTool 创建的别名会在更新后自动刷新。
+- **故障安全。** 如果别名无法写入（权限、磁盘已满），会记录错误，AmethystTool 正常启动。
+- **关闭：** `denuvo_aliases = false` 会停止维护别名，但不会删除它们——请手动删除或使用下面的脚本。该键在 Steam 启动时读取（不热重载）。
+
+**不想编辑 TOML：** 发布 ZIP 中包含 `enable-denuvo-compat.ps1`。运行一次（Steam 路径从注册表读取；可用 `-SteamPath` 指定），然后运行验证器。`-Remove` 会再次删除别名（仅限 AmethystTool 创建的）。
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\enable-denuvo-compat.ps1
+powershell -ExecutionPolicy Bypass -File .\enable-denuvo-compat.ps1 -Remove
+```
 
 ### 通过 Lua 获取 Manifest
 
