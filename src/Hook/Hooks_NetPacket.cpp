@@ -9,6 +9,8 @@
 #include "HookMacros.h"
 #include "Hook/LicenseListLogic.h"
 #include "Hook/NetPacketLogic.h"
+#include "Hook/AchievementsLogic.h"
+#include "Hook/RichPresenceLogic.h"
 #include "OSTPlatform/include/Memory.h"
 #include "Steam/NetPacket.h"
 #include "OSTPlatform/include/Thread.h"
@@ -458,11 +460,9 @@ namespace Hooks_NetPacket_UserStats {
     std::deque<std::vector<uint8>> g_UserAchPending;   // ready-to-deliver 147 frames
 
     constexpr uint64 kDroppedJobId = 1;   // never allocated by CJobMgr
-    // Release a held reply as-is if its schema never shows, well before the
-    // client's job would time out.
-    constexpr auto kHoldTimeout = std::chrono::seconds(8);
-    // Bound what we keep alive: past this a reply is left untouched, not held.
-    constexpr size_t kMaxHeldUserAch = 16;
+    // The hold policy (kHoldTimeout: release a held reply as-is if its schema
+    // never shows; kMaxHeldUserAch: bound what we keep alive) and every
+    // hold/rebuild/skip decision below live in Hook/AchievementsLogic.h.
 
     AccountID_t ActiveAccountId() {
         uint32_t id = 0;
@@ -577,9 +577,9 @@ namespace Hooks_NetPacket_UserStats {
         // Rebuild only the logged-in user's own page (a request without a
         // steamid is the client asking about itself).
         const AccountID_t self = ActiveAccountId();
-        const AccountID_t target = req.has_steamid()
-            ? static_cast<AccountID_t>(req.steamid() & 0xFFFFFFFFull) : self;
-        const AccountID_t acct = (self != 0 && target == self) ? self : 0;
+        const AccountID_t target =
+            AchievementsLogic::RequestedAccount(req.has_steamid(), req.steamid(), self);
+        const AccountID_t acct = AchievementsLogic::ShouldSkipReconstruction(target, self) ? 0 : self;
         {
             std::lock_guard lk(g_JobMutex);
             g_UserAchJobs[hdr.jobid_source()] = UserAchJob{appId, acct};
@@ -621,7 +621,7 @@ namespace Hooks_NetPacket_UserStats {
         std::lock_guard ach(g_AchMutex);
 
         // A hash_only reply carries no achievements; don't let it wipe a good cache.
-        if (schema.empty() && g_GameAchSchema.count(appId)) {
+        if (AchievementsLogic::ShouldKeepCachedSchema(schema.size(), g_GameAchSchema.count(appId) != 0)) {
             LOG_ACHIEVEMENT_DEBUG("GetGameAchievements recv: app={} empty reply, keeping cached schema", appId);
         } else {
             LOG_ACHIEVEMENT_DEBUG("GetGameAchievements recv: app={} stored {} group(s), {} achievement(s)",
@@ -653,7 +653,7 @@ namespace Hooks_NetPacket_UserStats {
             g_UserAchJobs.erase(it);
         }
         // Not the logged-in user's page (or not a lua game): Valve's reply stands.
-        if (job.acct == 0 || !LuaConfig::HasDepot(job.appId)) return;
+        if (!AchievementsLogic::ShouldRebuildReply(job.acct, LuaConfig::HasDepot(job.appId))) return;
 
         // Header: force eresult OK so the client doesn't treat the game as denied.
         hdr.set_eresult(static_cast<int32_t>(k_EResultOK));
@@ -663,8 +663,9 @@ namespace Hooks_NetPacket_UserStats {
 
         std::lock_guard ach(g_AchMutex);
         size_t nUnlocked = 0;
-        if (!FillUserAchievements(job.appId, job.acct, resp, nUnlocked)) {
-            if (g_HeldUserAch.size() >= kMaxHeldUserAch) return;   // too many waiting; leave Valve's reply alone
+        const bool schemaCached = FillUserAchievements(job.appId, job.acct, resp, nUnlocked);
+        if (!schemaCached) {
+            if (!AchievementsLogic::ShouldHoldReply(schemaCached, g_HeldUserAch.size())) return;   // too many waiting; leave Valve's reply alone
             // Beat its schema (normal on the first page open after a Steam
             // start). Hold the real reply; aim this copy at a dead job so the
             // client drops it while the real job keeps waiting.
@@ -702,7 +703,7 @@ namespace Hooks_NetPacket_UserStats {
         {
             std::lock_guard ach(g_AchMutex);
             for (auto h = g_HeldUserAch.begin(); h != g_HeldUserAch.end();) {
-                if (now - h->at >= kHoldTimeout) { QueueHeldUserAch(*h); h = g_HeldUserAch.erase(h); }
+                if (AchievementsLogic::ShouldReleaseHeld(now - h->at)) { QueueHeldUserAch(*h); h = g_HeldUserAch.erase(h); }
                 else ++h;
             }
         }
@@ -1391,42 +1392,8 @@ namespace Hooks_NetPacket_RichPresence {
     // does not conflate KV state.
     std::unordered_map<AppId_t, std::vector<std::pair<std::string, std::string>>> g_RPKvsByAppId;
 
-    // Walk Steam's binary KV1 stream (a top-level "RP" struct around
-    // string KVs) and collect every string KV at any depth.  Type 0x00
-    // starts a struct, 0x01 a string KV, 0x08 ends a struct.  String KVs
-    // are null-terminated key + null-terminated value.
-    static void ExtractStringKVs(const uint8* data, uint32 size,
-                                 std::vector<std::pair<std::string, std::string>>& out)
-    {
-        uint32 pos = 0;
-        int depth = 0;
-        auto readCStr = [&](std::string& s) -> bool {
-            uint32 start = pos;
-            while (pos < size && data[pos] != 0) ++pos;
-            if (pos >= size) return false;
-            s.assign(reinterpret_cast<const char*>(data + start), pos - start);
-            ++pos;
-            return true;
-        };
-        while (pos < size) {
-            uint8 type = data[pos++];
-            if (type == 0x08) {
-                if (depth > 0) { --depth; continue; }
-                break;
-            }
-            if (type == 0x00) {
-                std::string name;
-                if (!readCStr(name)) return;
-                ++depth;
-            } else if (type == 0x01) {
-                std::string key, value;
-                if (!readCStr(key) || !readCStr(value)) return;
-                out.emplace_back(std::move(key), std::move(value));
-            } else {
-                return;
-            }
-        }
-    }
+    // The binary-KV1 parser (RichPresenceLogic::ExtractStringKVs) and the
+    // track / flag / capture decisions below live in Hook/RichPresenceLogic.h.
 
     // Patch the self Friend entry with the appid (0 = stopped) and per-app
     // KVs.  Mask status_flags's RichPresence bit (0x1000) on appid + empty
@@ -1437,9 +1404,6 @@ namespace Hooks_NetPacket_RichPresence {
                                 CMsgClientPersonaState::Friend* entry,
                                 AppId_t appid)
     {
-        // EClientPersonaStateFlag::k_EClientPersonaStateFlagRichPresence
-        constexpr uint32 kStatusFlagRichPresence = 0x1000;
-
         if (appid) {
             entry->set_game_played_app_id(appid);
             entry->set_gameid(static_cast<uint64>(appid));
@@ -1457,16 +1421,16 @@ namespace Hooks_NetPacket_RichPresence {
                     kv->set_key(k);
                     kv->set_value(v);
                 }
-                msg.set_status_flags(msg.status_flags() | kStatusFlagRichPresence);
-            } else {
-                msg.set_status_flags(msg.status_flags() & ~kStatusFlagRichPresence);
             }
+            msg.set_status_flags(
+                RichPresenceLogic::WithRichPresenceFlag(msg.status_flags(), appid, hasKvs));
         } else {
             entry->clear_game_played_app_id();
             entry->clear_gameid();
             entry->clear_game_name();
             entry->clear_rich_presence();
-            msg.set_status_flags(msg.status_flags() | kStatusFlagRichPresence);
+            msg.set_status_flags(
+                RichPresenceLogic::WithRichPresenceFlag(msg.status_flags(), appid, /*hasKvs=*/false));
         }
     }
 
@@ -1522,7 +1486,7 @@ namespace Hooks_NetPacket_RichPresence {
     void TrackRPSend(const uint8* pBody, uint32 cbBody)
     {
         std::lock_guard lk(g_RPMutex);
-        if (g_LocalSteamId == 0 || g_PlayingAppId == 0) return;
+        if (!RichPresenceLogic::ShouldCaptureRpUpload(g_LocalSteamId, g_PlayingAppId)) return;
 
         CMsgClientRichPresenceUpload up;
         if (!up.ParseFromArray(pBody, cbBody)) return;
@@ -1531,8 +1495,8 @@ namespace Hooks_NetPacket_RichPresence {
         const std::string& kv = up.rich_presence_kv();
         auto& kvs = g_RPKvsByAppId[g_PlayingAppId];
         kvs.clear();
-        ExtractStringKVs(reinterpret_cast<const uint8*>(kv.data()),
-                         static_cast<uint32>(kv.size()), kvs);
+        RichPresenceLogic::ExtractStringKVs(reinterpret_cast<const uint8*>(kv.data()),
+                                            static_cast<uint32>(kv.size()), kvs);
         LOG_RICHPRESENCE_DEBUG("RP upload appid={}: kv_bytes={} extracted={} pairs",
             g_PlayingAppId, kv.size(), kvs.size());
 
@@ -1546,15 +1510,16 @@ namespace Hooks_NetPacket_RichPresence {
         // tail's appid drives our inject.
         AppId_t topmost = 0;
         if (msg.games_played_size() > 0) {
-            topmost = static_cast<AppId_t>(
-                msg.games_played(msg.games_played_size() - 1).game_id() & UINT32_MAX);
+            topmost = RichPresenceLogic::AppIdFromGameId(
+                msg.games_played(msg.games_played_size() - 1).game_id());
         }
 
         // Only track when the topmost is an unlocked AppId we can inject for.
         // Owned games on top let the server's natural broadcast paint the
         // cache; -onlinefix games are already handled by the OnlineFix path.
         AppId_t newTracked = 0;
-        if (topmost != 0 && topmost != kOnlineFixAppId && LuaConfig::HasDepot(topmost))
+        if (RichPresenceLogic::ShouldTrackAppId(topmost, LuaConfig::HasDepot(topmost),
+                                                /*isOnlineFix=*/topmost == kOnlineFixAppId))
             newTracked = topmost;
 
         // Resolve (and cache) the game name BEFORE taking g_RPMutex: ApplyGameFields
@@ -1576,24 +1541,26 @@ namespace Hooks_NetPacket_RichPresence {
                 }
             }
 
-            if (g_PlayingAppId == newTracked) {
-                // fallthrough to the SetAccountId call below
-                oldTracked = newTracked;
-            } else {
-                oldTracked = g_PlayingAppId;
+            // oldTracked is what we tracked before this message (also the "same
+            // appid" case, which falls through to the SetAccountId call below).
+            const RichPresenceLogic::TrackAction action =
+                RichPresenceLogic::DecideTrackAction(g_PlayingAppId, newTracked, topmost);
+            oldTracked = g_PlayingAppId;
+            if (action != RichPresenceLogic::TrackAction::Unchanged) {
                 g_PlayingAppId = newTracked;
 
-                if (newTracked != 0) {
+                if (action == RichPresenceLogic::TrackAction::InjectGame) {
                     LOG_RICHPRESENCE_INFO("Tracking topmost appid {}", newTracked);
                     if (BuildInject(newTracked)) g_InjectPending = true;
-                } else if (topmost == 0) {
+                } else if (action == RichPresenceLogic::TrackAction::InjectClear) {
                     // Stack went empty — inject a clear so the cache reverts.
                     LOG_RICHPRESENCE_DEBUG("GamesPlayed empty, scheduling cache clear");
                     if (BuildInject(0)) g_InjectPending = true;
                 } else {
-                    // Topmost is owned (or -onlinefix); let the server's broadcast
-                    // paint it.  Skipping the clear-inject here avoids a brief
-                    // "Online" flicker between our drop and the server's push.
+                    // DeferToServer: topmost is owned (or -onlinefix); let the
+                    // server's broadcast paint it.  Skipping the clear-inject here
+                    // avoids a brief "Online" flicker between our drop and the
+                    // server's push.
                     LOG_RICHPRESENCE_DEBUG("Topmost is appid {} (owned or onlinefix); deferring to server", topmost);
                 }
             }
@@ -1641,7 +1608,7 @@ namespace Hooks_NetPacket_RichPresence {
             g_HaveSelfCached = true;
         }
 
-        if (g_PlayingAppId == 0) return false;
+        if (!RichPresenceLogic::ShouldInjectRichPresence(g_PlayingAppId)) return false;
 
         ApplyGameFields(msg, selfEntry, g_PlayingAppId);
         g_cbNewBody = static_cast<uint32>(msg.ByteSizeLong());

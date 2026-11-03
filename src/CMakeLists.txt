@@ -175,6 +175,8 @@ add_library(AmethystTool SHARED
     Hook/OnlineFixLogic.cpp
     Hook/LicenseListLogic.cpp
     Hook/NetPacketLogic.cpp
+    Hook/AchievementsLogic.cpp
+    Hook/RichPresenceLogic.cpp
     Hook/Hooks_NetPacket.cpp
     Hook/PendingAPICalls.cpp
     Hook/Hooks_SteamUI.cpp
