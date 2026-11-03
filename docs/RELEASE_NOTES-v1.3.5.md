@@ -13,9 +13,9 @@ Base: v1.3.4 (`f9aa1f7`).
 
 The validator script itself (`https://luatools.vercel.app/Devuvo.ps1`) could not be downloaded from the build environment, so the mechanism was derived from the field test and confirmed by the design, not by reading the script:
 
-- **File names next to `steam.exe`** (`Test-Path`-style check). Renaming `AmethystTool.dll` → `OpenSteamTool.dll` and `amethysttool.toml` → `opensteamtool.toml` was enough to pass, with nothing else changed.
-- **Not a module-in-memory check.** Our proxies load the DLL as `AmethystTool.dll`, and Windows keeps that module name even if the file is renamed while Steam runs. After a rename plus a Steam restart, the proxies would not load the tool at all. The validator passed anyway, so it cannot be checking `steam.exe` for a module named `OpenSteamTool.dll`.
-- **Not a registry or service check.** A rename touches neither, and it was sufficient.
+- **File names next to `steam.exe`** (`Test-Path`-style check). Field test (Phantom Blade Zero, AppID 4115450): copying `AmethystTool.dll` to `OpenSteamTool.dll` and `amethysttool.toml` to `opensteamtool.toml` (the originals stayed in place) was enough for the validator to report VALIDATED and generate the ticket, with nothing else changed.
+- **Not a module-in-memory check.** Steam kept running with the original `AmethystTool.dll` loaded; the `OpenSteamTool.dll` copy was never loaded into `steam.exe` by anything. The validator passed anyway, so it cannot be checking `steam.exe` for a module named `OpenSteamTool.dll`.
+- **Not a registry or service check.** Copying two files touches neither, and it was sufficient.
 
 That is why plain file aliases are the whole fix. To confirm against the script yourself:
 
@@ -43,5 +43,6 @@ Pending local validation (written without a Windows toolchain):
 - Expected warnings: unchanged from baseline (Release 9 / Debug 8).
 - ABI: `TokeerUri` at ordinal 1. CRT: static `/MT`.
 - Manual: see `TESTING.md` → *Testing Denuvo compatibility mode*.
+- **One delta from the field test to confirm on Windows:** the manual test used a plain copy of the TOML, while the generated `opensteamtool.toml` is that same content behind a 3-line `#` comment header (the ownership marker). It is valid TOML and should be invisible to a `Test-Path` check, but run the validator once against the DLL-generated aliases (not hand-made copies) before tagging. If it ever rejects the header, the fallback is a header-less alias with ownership tracked differently.
 
 See `CHANGELOG.md` for the full list.
