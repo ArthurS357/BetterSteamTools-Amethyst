@@ -138,6 +138,11 @@ namespace {
 
     constexpr uint32_t kWorking = 0x1111;   // resolves today
     constexpr uint32_t kMissing = 0x2222;   // required, failed to resolve
+    constexpr uint32_t kOptional = 0x4444;  // an optional function the cache never had
+
+    // Loaded module image size used by the H-1 / H-1b tests. Every RVA those
+    // tests mean to be "inside the image" is below it.
+    constexpr size_t kImage = 0x10000;
 
     // Cache as it is now: one working function, the missing one absent.
     EntryMap CachedToday() {
@@ -149,17 +154,17 @@ TEST(PatternRefreshShouldReplaceCache, RejectReplacementWhenExistingEntryChanges
     EntryMap candidate = CachedToday();
     candidate[kWorking].rva = 0x6666;                                   // moves a working hook
     candidate[kMissing] = PatternEntry{ "Missing", 0x2000, "" };
-    EXPECT_FALSE(PatternRefreshLogic::EntriesAreConsistent(CachedToday(), candidate, { kMissing }));
+    EXPECT_FALSE(PatternRefreshLogic::EntriesAreConsistent(CachedToday(), candidate, { kMissing }, kImage));
     EXPECT_FALSE(ShouldReplaceCache(CachedToday(), candidate, { kMissing },
-                                    /*bodyDiffers=*/true, /*resolved=*/1, /*unresolvable=*/0));
+                                    /*bodyDiffers=*/true, /*resolved=*/1, /*unresolvable=*/0, kImage));
 }
 
 TEST(PatternRefreshShouldReplaceCache, AcceptReplacementWhenOnlyMissingKeysAdded) {
     EntryMap candidate = CachedToday();
     candidate[kMissing] = PatternEntry{ "Missing", 0x2000, "" };       // only the fix
-    EXPECT_TRUE(PatternRefreshLogic::EntriesAreConsistent(CachedToday(), candidate, { kMissing }));
+    EXPECT_TRUE(PatternRefreshLogic::EntriesAreConsistent(CachedToday(), candidate, { kMissing }, kImage));
     EXPECT_TRUE(ShouldReplaceCache(CachedToday(), candidate, { kMissing },
-                                   /*bodyDiffers=*/true, /*resolved=*/1, /*unresolvable=*/0));
+                                   /*bodyDiffers=*/true, /*resolved=*/1, /*unresolvable=*/0, kImage));
 }
 
 TEST(PatternRefreshShouldReplaceCache, RejectReplacementWhenSignatureChanges) {
@@ -167,7 +172,7 @@ TEST(PatternRefreshShouldReplaceCache, RejectReplacementWhenSignatureChanges) {
     candidate[kWorking].sig = "E8 ?? ?? ?? ??";                         // rewrites a working sig
     candidate[kMissing] = PatternEntry{ "Missing", 0x2000, "" };
     EXPECT_FALSE(ShouldReplaceCache(CachedToday(), candidate, { kMissing },
-                                    /*bodyDiffers=*/true, /*resolved=*/1, /*unresolvable=*/0));
+                                    /*bodyDiffers=*/true, /*resolved=*/1, /*unresolvable=*/0, kImage));
 }
 
 TEST(PatternRefreshShouldReplaceCache, RejectWhenACarriedMissingEntryIsUnresolvable) {
@@ -177,7 +182,102 @@ TEST(PatternRefreshShouldReplaceCache, RejectWhenACarriedMissingEntryIsUnresolva
     candidate[kMissing] = PatternEntry{ "Missing", 0x2000, "" };
     candidate[0x3333]   = PatternEntry{ "AlsoMissing", 0xFFFFFFFF, "" };
     EXPECT_FALSE(ShouldReplaceCache(CachedToday(), candidate, { kMissing, 0x3333 },
-                                    /*bodyDiffers=*/true, /*resolved=*/1, /*unresolvable=*/1));
+                                    /*bodyDiffers=*/true, /*resolved=*/1, /*unresolvable=*/1, kImage));
+}
+
+// ── H-1b: entries ADDED outside the missing set ─────────────────
+//
+// The caller only probes the missing REQUIRED functions, and there is no cached
+// entry to compare a brand-new key against -- so before H-1b a mirror could add
+// e.g. an optional function with a wild RVA and have it hooked, unvalidated, on
+// the next launch.
+
+TEST(PatternRefreshNewEntries, RejectNewOptionalEntryWithRvaOutsideTheImage) {
+    EntryMap candidate = CachedToday();
+    candidate[kMissing]  = PatternEntry{ "Missing", 0x2000, "" };               // the legitimate fix
+    candidate[kOptional] = PatternEntry{ "OptionalHook", 0x0FFFFFFF, "" };      // wild RVA, not "missing"
+    EXPECT_FALSE(PatternRefreshLogic::EntriesAreConsistent(CachedToday(), candidate, { kMissing }, kImage));
+    EXPECT_FALSE(ShouldReplaceCache(CachedToday(), candidate, { kMissing },
+                                    /*bodyDiffers=*/true, /*resolved=*/1, /*unresolvable=*/0, kImage));
+}
+
+TEST(PatternRefreshNewEntries, AcceptNewOptionalEntryWithRvaInsideTheImage) {
+    EntryMap candidate = CachedToday();
+    candidate[kMissing]  = PatternEntry{ "Missing", 0x2000, "" };
+    candidate[kOptional] = PatternEntry{ "OptionalHook", 0x3000, "" };          // plausible: inside the image
+    EXPECT_TRUE(PatternRefreshLogic::EntriesAreConsistent(CachedToday(), candidate, { kMissing }, kImage));
+    EXPECT_TRUE(ShouldReplaceCache(CachedToday(), candidate, { kMissing },
+                                   /*bodyDiffers=*/true, /*resolved=*/1, /*unresolvable=*/0, kImage));
+}
+
+TEST(PatternRefreshNewEntries, AcceptNewSignatureOnlyEntry) {
+    // A sig-only entry has no RVA to trust blindly: the scan finds nothing if the
+    // pattern is wrong. It is not refused.
+    EntryMap candidate = CachedToday();
+    candidate[kMissing]  = PatternEntry{ "Missing", 0x2000, "" };
+    candidate[kOptional] = PatternEntry{ "OptionalHook", 0, "48 89 5C 24 ??" };
+    EXPECT_TRUE(PatternRefreshLogic::EntriesAreConsistent(CachedToday(), candidate, { kMissing }, kImage));
+}
+
+TEST(PatternRefreshNewEntries, AcceptNewEntryWithNeitherRvaNorSig) {
+    // Nothing to resolve, nothing to hook.
+    EntryMap candidate = CachedToday();
+    candidate[kOptional] = PatternEntry{ "Empty", 0, "" };
+    EXPECT_TRUE(PatternRefreshLogic::EntriesAreConsistent(CachedToday(), candidate, { kMissing }, kImage));
+}
+
+TEST(PatternRefreshNewEntries, ImageBoundaryIsExclusive) {
+    EntryMap candidate = CachedToday();
+    candidate[kOptional] = PatternEntry{ "OptionalHook", kImage - 1, "" };      // last valid byte
+    EXPECT_TRUE(PatternRefreshLogic::EntriesAreConsistent(CachedToday(), candidate, { kMissing }, kImage));
+    candidate[kOptional].rva = kImage;                                          // one past the end
+    EXPECT_FALSE(PatternRefreshLogic::EntriesAreConsistent(CachedToday(), candidate, { kMissing }, kImage));
+    candidate[kOptional].rva = static_cast<std::uintptr_t>(-1);                 // far outside
+    EXPECT_FALSE(PatternRefreshLogic::EntriesAreConsistent(CachedToday(), candidate, { kMissing }, kImage));
+}
+
+TEST(PatternRefreshNewEntries, UnknownImageSizeFailsClosed) {
+    // GetModuleImage failed (imageSize = 0): no new RVA can be validated, so a
+    // candidate that adds one is refused ...
+    EntryMap withRva = CachedToday();
+    withRva[kOptional] = PatternEntry{ "OptionalHook", 0x3000, "" };
+    EXPECT_FALSE(PatternRefreshLogic::EntriesAreConsistent(CachedToday(), withRva, { kMissing }, 0));
+    // ... but a candidate that adds nothing needing validation is still fine, so a
+    // transient GetModuleImage failure does not block an otherwise clean fix.
+    EntryMap clean = CachedToday();
+    clean[kMissing] = PatternEntry{ "Missing", 0x2000, "" };
+    EXPECT_TRUE(PatternRefreshLogic::EntriesAreConsistent(CachedToday(), clean, { kMissing }, 0));
+}
+
+TEST(PatternRefreshNewEntries, EntriesForMissingKeysAreTheCallersJob) {
+    // A missing key's entry is probed by the caller (and counted as unresolvable
+    // when bad); this predicate must not double-judge it, or a candidate that
+    // fixes one function and merely carries an unchanged bad entry for another
+    // could never be accepted.
+    EntryMap candidate = CachedToday();
+    candidate[kMissing] = PatternEntry{ "Missing", 0xFFFFFFFF, "" };            // outside the image
+    EXPECT_TRUE(PatternRefreshLogic::EntriesAreConsistent(CachedToday(), candidate, { kMissing }, kImage));
+}
+
+TEST(PatternRefreshNewEntries, UnchangedExistingEntriesAreNeverJudgedAgainstTheImage) {
+    // An entry the cache already had, byte-identical in the candidate, is today's
+    // state: even if its RVA were (oddly) beyond the size we measured, refusing
+    // it would break every revalidation for no gain.
+    EntryMap cached = { { kWorking, PatternEntry{ "Working", 0x20000, "" } } };   // > kImage
+    EntryMap candidate = cached;
+    candidate[kMissing] = PatternEntry{ "Missing", 0x2000, "" };
+    EXPECT_TRUE(PatternRefreshLogic::EntriesAreConsistent(cached, candidate, { kMissing }, kImage));
+}
+
+TEST(PatternRefreshNewEntries, StillRejectsChangedOrDroppedWorkingEntriesWhenNewOnesAreFine) {
+    // H-1 keeps working alongside H-1b.
+    EntryMap moved = CachedToday();
+    moved[kWorking].rva = 0x6666;
+    moved[kOptional] = PatternEntry{ "OptionalHook", 0x3000, "" };
+    EXPECT_FALSE(PatternRefreshLogic::EntriesAreConsistent(CachedToday(), moved, { kMissing }, kImage));
+
+    EntryMap dropped = { { kOptional, PatternEntry{ "OptionalHook", 0x3000, "" } } };   // kWorking gone
+    EXPECT_FALSE(PatternRefreshLogic::EntriesAreConsistent(CachedToday(), dropped, { kMissing }, kImage));
 }
 
 TEST(PatternRefreshRvaValidation, RvaMustLieInsideTheImage) {
