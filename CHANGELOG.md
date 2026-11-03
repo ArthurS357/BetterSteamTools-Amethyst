@@ -1,8 +1,8 @@
 # Changelog
 
-## [v1.3.5] - Unreleased
+## [v1.3.5] - 2026-11-03
 
-> **Pending local validation:** written in Linux sessions without a Windows build. Expected: 349/349 tests per configuration (256 + 93 new: 31 in `compat_alias_logic_test.cpp` (was 20), 22 in `achievements_logic_test.cpp`, 31 in `rich_presence_logic_test.cpp`, 9 more in `pattern_refresh_logic_test.cpp`). Run `.\build.ps1 -Clean` before tagging. What *was* verified off Windows: the 259-test Linux suite (ASan + UBSan, `-Werror` on the new files), a mingw `-fsyntax-only` pass over every touched `.cpp` (no new diagnostics vs. the previous commit), and mutation checks that the new tests fail when the fixes are removed -- none of which replaces the MSVC build.
+Validated locally: 349/349 tests in Release and Debug, warnings 9/8, ABI TokeerUri ordinal 1, CRT /MT.
 
 ### Added
 - **Denuvo compatibility mode (`[compatibility] denuvo_aliases`, off by default).** The official Denuvo activation flow (TokeerDRM + LuaTools Validator) only recognises the upstream engine by its file names next to `steam.exe`, so fork users got *"Set up your activation engine first"*. When enabled, AmethystTool drops `OpenSteamTool.dll` (byte copy of `AmethystTool.dll`) and `opensteamtool.toml` (copy of `amethysttool.toml` behind a 3-line marker header) at Steam startup. Nothing in AmethystTool reads the aliases; no network or registry access is involved. Policy and file I/O in `Utils/Config/CompatAliasLogic.{h,cpp}`, called from `dllmain.cpp` (`ApplyCompatibilityAliases`) right after `Config::Load`.

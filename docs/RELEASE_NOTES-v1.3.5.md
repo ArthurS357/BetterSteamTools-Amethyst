@@ -40,12 +40,18 @@ If that ever shows a `Get-Process steam | ... .Modules` or a registry lookup, th
 
 ## Verification
 
-Pending local validation (written without a Windows toolchain):
+Validated locally on Windows (2026-11-03):
 
-- `.\build.ps1 -Clean`: Release + Debug, expected **349/349** tests in each (256 + 93 new). Checked off Windows only: the 259-test Linux suite and a mingw syntax pass over the touched files -- the `Hooks_NetPacket.cpp` / `dllmain.cpp` / `PatternLoader.cpp` integrations have not been built with MSVC.
-- Expected warnings: unchanged from baseline (Release 9 / Debug 8).
+- `.\build.ps1 -Clean`: 349/349 tests in Release and in Debug (256 + 93 new).
+- Warnings: Release 9 / Debug 8 (unchanged baseline).
 - ABI: `TokeerUri` at ordinal 1. CRT: static `/MT`.
-- Manual: see `TESTING.md` → *Testing Denuvo compatibility mode*.
-- **One delta from the field test to confirm on Windows:** the manual test used a plain copy of the TOML, while the generated `opensteamtool.toml` is that same content behind a 3-line `#` comment header (the ownership marker). It is valid TOML and should be invisible to a `Test-Path` check, but run the validator once against the DLL-generated aliases (not hand-made copies) before tagging. If it ever rejects the header, the fallback is a header-less alias with ownership tracked differently.
+- Linux CI (`linux-logic-tests.yml`): 259 pure-logic tests passing under ASan + UBSan.
+
+Manual step still pending for users who want Denuvo tickets:
+run `enable-denuvo-compat.ps1` (or set `[compatibility] denuvo_aliases = true`),
+restart Steam, then run the LuaTools Validator once against the **DLL-generated**
+aliases. The only difference from the field test is the 3-line `#` header on
+`opensteamtool.toml`. If the validator ever rejects it, the fallback is a
+header-less alias with ownership tracked differently.
 
 See `CHANGELOG.md` for the full list.
