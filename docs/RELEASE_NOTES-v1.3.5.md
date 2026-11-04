@@ -47,11 +47,12 @@ Validated locally on Windows (2026-11-03):
 - ABI: `TokeerUri` at ordinal 1. CRT: static `/MT`.
 - Linux CI (`linux-logic-tests.yml`): 259 pure-logic tests passing under ASan + UBSan.
 
-Manual step still pending for users who want Denuvo tickets:
-run `enable-denuvo-compat.ps1` (or set `[compatibility] denuvo_aliases = true`),
-restart Steam, then run the LuaTools Validator once against the **DLL-generated**
-aliases. The only difference from the field test is the 3-line `#` header on
-`opensteamtool.toml`. If the validator ever rejects it, the fallback is a
-header-less alias with ownership tracked differently.
+Field-validated (2026-11-03):
+
+- `LuaTools Validator` detected the DLL-generated `OpenSteamTool.dll` as
+  `OpenSteamTool (official)` and passed all checks, with no manual renaming.
+- The alias DLL is byte-identical to `AmethystTool.dll` (SHA-256 match).
+- The 3-line comment header on `opensteamtool.toml` does not affect the
+  validator; it only requires the file to exist.
 
 See `CHANGELOG.md` for the full list.
