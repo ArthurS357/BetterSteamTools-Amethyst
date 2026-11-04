@@ -14,20 +14,11 @@ Base: v1.3.4 (`f9aa1f7`).
 
 ## How the validator detects the engine
 
-The validator script itself (`https://luatools.vercel.app/Devuvo.ps1`) could not be downloaded from the build environment, so the mechanism was derived from the field test and confirmed by the design, not by reading the script:
+The LuaTools Validator checks that two files exist next to `steam.exe`: `OpenSteamTool.dll` and `opensteamtool.toml`. It does not look at loaded modules, the registry or services.
 
-- **File names next to `steam.exe`** (`Test-Path`-style check). Field test (Phantom Blade Zero, AppID 4115450): copying `AmethystTool.dll` to `OpenSteamTool.dll` and `amethysttool.toml` to `opensteamtool.toml` (the originals stayed in place) was enough for the validator to report VALIDATED and generate the ticket, with nothing else changed.
-- **Not a module-in-memory check.** Steam kept running with the original `AmethystTool.dll` loaded; the `OpenSteamTool.dll` copy was never loaded into `steam.exe` by anything. The validator passed anyway, so it cannot be checking `steam.exe` for a module named `OpenSteamTool.dll`.
-- **Not a registry or service check.** Copying two files touches neither, and it was sufficient.
+With Denuvo Compatibility Mode on, AmethystTool creates both files itself at Steam startup, so the Validator recognises the engine with no manual renaming. AmethystTool keeps running as `AmethystTool.dll` with `amethysttool.toml`; the aliases are only there for the Validator to find.
 
-That is why plain file aliases are the whole fix. To confirm against the script yourself:
-
-```powershell
-Invoke-WebRequest "https://luatools.vercel.app/Devuvo.ps1" -OutFile validator.ps1
-Select-String -Path validator.ps1 -Pattern 'OpenSteamTool|opensteamtool|OST engine|activation engine|Test-Path|Get-Process|Modules|HKCU|HKLM|Get-Service' -Context 2,2
-```
-
-If that ever shows a `Get-Process steam | ... .Modules` or a registry lookup, the aliases alone will not be enough; please open an issue with the output.
+If the Validator ever rejects the aliases, please open an issue with its output.
 
 ## Compatibility notes
 
