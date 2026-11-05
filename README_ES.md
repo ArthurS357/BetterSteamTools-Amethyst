@@ -58,7 +58,7 @@ AmethystTool es un fork de OpenSteamTools reforzado en privacidad. Diferencias d
 - Cada entrada define un `path` (un nombre simple se resuelve junto a `steam.exe`; una ruta absoluta se usa tal cual) y condiciones opcionales — `when_cmdline` (subcadena requerida en el comando de lanzamiento), `when_appids` (restringir a appids concretos) y `all_games` (`true` = todos los juegos, `false` = solo juegos añadidos por Lua). Un DLL se inyecta cuando coinciden *todas* las condiciones que define; varias entradas pueden apuntar al mismo juego y cada DLL se inyecta como máximo una vez.
 
 ### Préstamo familiar y juego en remoto
-- Omite las restricciones de Steam Family Sharing para los juegos que se hayan añadido a la biblioteca con `addappid` en Lua. Todas las cuentas de la familia de Steam que participen en el préstamo familiar deben usar AmethystTool para que esto funcione.
+- **Sin omisión de Family Sharing (eliminada en v1.3.6).** Steam valida el préstamo familiar en sus servidores, y descartar sus mensajes de control en el cliente podía provocar el cierre de sesión. AmethystTool ya no toca ese tráfico, así que el préstamo familiar se comporta como Steam lo diseñó (por ejemplo, una biblioteca prestada se bloquea mientras su dueño juega). Los juegos añadidos con `addappid` en Lua no se ven afectados.
 
 ### Compatible con juegos protegidos por Denuvo y SteamStub
 - Los juegos protegidos únicamente por SteamStub no requieren la configuración de `AppTicket`. AmethystTool puede reutilizar el ticket local de ConfigStore de Steam y falsificar el AppId solicitado a través de una vulnerabilidad de desbordamiento por cuatro (off-by-four ticket parsing vulnerability) en SteamDRMP, sin necesidad de inyectarse en el proceso del juego.

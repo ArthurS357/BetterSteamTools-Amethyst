@@ -119,7 +119,10 @@ namespace {
     }
 
     // ── Hash constants for target_job_name dispatch ─────────────
-    constexpr uint32 HASH_JOB_NotifyRunningApps = Fnv1aHash("FamilyGroupsClient.NotifyRunningApps#1");
+    // FamilyGroupsClient.NotifyRunningApps#1 and eMsg 9406
+    // (SharedLibraryStopPlaying) are deliberately NOT dispatched (v1.3.6).
+    // Steam enforces Family Sharing server-side; swallowing those messages
+    // client-side can get the session logged out. Do not re-add a handler.
     constexpr uint32 HASH_JOB_GetUserStats = Fnv1aHash("Player.GetUserStats#1");
     constexpr uint32 HASH_JOB_GetManifestRequestCode = Fnv1aHash("ContentServerDirectory.GetManifestRequestCode#1");
     constexpr uint32 HASH_JOB_GetGameAchievements = Fnv1aHash("Player.GetGameAchievements#1");
@@ -885,21 +888,6 @@ namespace Hooks_NetPacket_Licenses {
     }
 
 } // namespace Hooks_NetPacket_Licenses
-
-
-// ════════════════════════════════════════════════════════════════
-//  Hooks_NetPacket_FamilySharing
-// ════════════════════════════════════════════════════════════════
-namespace Hooks_NetPacket_FamilySharing {
-
-    void ClearBody(const uint8*, uint32)
-    {
-        LOG_NETPACKET_DEBUG("Clearing family sharing message...");
-        g_cbNewBody = 0;
-        g_NeedReplaceBody = true;
-    }
-
-} // namespace Hooks_NetPacket_FamilySharing
 
 
 // ════════════════════════════════════════════════════════════════
@@ -2092,10 +2080,6 @@ namespace {
 
         switch (Fnv1aHash(targetJobName)) {
 
-        case HASH_JOB_NotifyRunningApps:
-            Hooks_NetPacket_FamilySharing::ClearBody(pBody, cbBody);
-            return;
-
         case HASH_JOB_GetUserStats:
             Hooks_NetPacket_UserStats::HandleRecv_GetUserStatsResponse(pHdr, cbHdr, pBody, cbBody);
             return;
@@ -2151,10 +2135,6 @@ namespace {
         case k_EMsgClientGetUserStatsResponse:     // 819
             g_NeedReplaceBody = Hooks_NetPacket_UserStats::HandleRecv_ClientGetUserStatsResponse(
                 pBody, cbBody);
-            return;
-
-        case k_EMsgClientSharedLibraryStopPlaying:     // 9406
-            Hooks_NetPacket_FamilySharing::ClearBody(pBody, cbBody);
             return;
 
         case k_EMsgClientPersonaState:                 // 766

@@ -1,5 +1,25 @@
 # Changelog
 
+## [v1.3.6] - 2026-11-04
+
+Hotfix. Built from the v1.3.5 tip (the `main` branch predates v1.3.4 and carries neither this changelog nor the Linux CI).
+
+### Removed
+- **Family Share bypass** (Steam validates Family Sharing server-side; suppressing its enforcement messages on the client causes logouts). `Hooks_NetPacket.cpp` no longer drops either of the two inbound messages the bypass cleared by replacing their body with an empty one (`Hooks_NetPacket_FamilySharing::ClearBody`, now deleted):
+  - `FamilyGroupsClient.NotifyRunningApps#1` (eMsg 147 service job, `HASH_JOB_NotifyRunningApps`),
+  - `CMsgClientSharedLibraryStopPlaying` (eMsg 9406).
+  Both now reach Steam untouched, so a borrowed library is locked while its owner plays, as Steam intends. There was no TOML key for this, so there is no config default to change and no config migration.
+
+### Kept on purpose
+- `AppOwnership::bFamilyShared` (`Steam/Structs.h`) and the `CFamilyGroupsClient_NotifyRunningApps_Notification` / `CMsgClientSharedLibraryStopPlaying` definitions in `proto/steam_messages.proto` are read-only layout/parse definitions and stay, so the struct ABI is unchanged. Nothing ever wrote `bFamilyShared`.
+- `CheckAppOwnership` (`Hook/Hooks_Package.cpp`) still sets `bOwnsLicense = true` for Lua-added apps. That is local ownership state (it is what makes DLC of a Lua-added game show as owned) and never leaves the client, so it is not part of this change.
+
+### Changed
+- `README.md`, `README_ES.md`, `README_ZH.md`: the "Family Sharing" bullet no longer advertises the bypass.
+
+### Tests
+- No test changes. The removal is structural (two `case` labels, one helper and one hash constant deleted from the Windows-only `Hooks_NetPacket.cpp`), so there is no remaining decision to unit-test; the Linux pure-logic suite is untouched (19 files / 259 tests). Needs an MSVC build (`build.ps1`) before release.
+
 ## [v1.3.5] - 2026-11-03
 
 Validated locally: 349/349 tests in Release and Debug, warnings 9/8, ABI TokeerUri ordinal 1, CRT /MT.
