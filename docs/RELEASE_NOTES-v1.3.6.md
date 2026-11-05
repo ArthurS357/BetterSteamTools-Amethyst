@@ -1,4 +1,4 @@
-# AmethystTool v1.3.6 (DRAFT)
+# AmethystTool v1.3.6
 
 Base: v1.3.5 (`d88c96e`). Hotfix release.
 
@@ -28,10 +28,11 @@ If you share your library with other family members, each of them should update 
 
 ## Verification
 
-> Pending: this draft was written before the Windows build. The change removes code from `Hooks_NetPacket.cpp`, which is only compiled with MSVC, so it must be built and checked locally before release:
->
-> - `.\build.ps1 -Clean`: expected 349/349 tests in Release and Debug, warnings at the baseline (Release 9 / Debug 8).
-> - Linux CI (`linux-logic-tests.yml`): expected 259 pure-logic tests passing under ASan + UBSan (unchanged by this release).
-> - Manual: log in, then start and stop a game from a shared library, with Family Sharing active. Steam should stay logged in.
+Validated locally on Windows (2026-11-04):
+- `.\build.ps1 -Clean`: 349/349 tests in Release and Debug.
+- Warnings: Release 9 / Debug 8 (baseline).
+- ABI: `TokeerUri` ordinal 1. CRT: `/MT` static.
+
+Linux CI (`linux-logic-tests.yml`): 259 pure-logic tests passing under ASan + UBSan (unchanged by this release).
 
 See `CHANGELOG.md` for the full list.

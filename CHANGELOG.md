@@ -1,6 +1,6 @@
 # Changelog
 
-## [v1.3.6] - Unreleased
+## [v1.3.6] - 2026-11-04
 
 Hotfix. Built from the v1.3.5 tip (the `main` branch predates v1.3.4 and carries neither this changelog nor the Linux CI).
 
