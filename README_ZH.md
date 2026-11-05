@@ -63,7 +63,7 @@ AmethystTool 是 OpenSteamTools 的一个注重隐私的分支。与上游的行
 - 每个条目设置 `path`（裸文件名相对于 `steam.exe` 解析，绝对路径按原样使用）和可选条件——`when_cmdline`（启动命令中必须包含的子字符串）、`when_appids`（限定特定 appid）和 `all_games`（`true` = 所有游戏，`false` = 仅 Lua 添加的游戏）。当某个 DLL 设置的*所有*条件都匹配时才注入；多个条目可以指向同一游戏，每个 DLL 最多注入一次
 
 ### 家庭共享和远程同乐
-- 绕过 Steam 家庭共享限制，适用于通过 Lua 中 `addappid` 添加到库的游戏。参与共享的 Steam 家庭中的所有账户都必须使用 AmethystTool 才能生效
+- **不再绕过家庭共享（v1.3.6 中移除）。** Steam 在服务器端校验家庭共享，在客户端丢弃其控制消息可能导致账号被登出。AmethystTool 不再处理这部分流量，家庭共享将按 Steam 的设计运行（例如，库的所有者正在游玩时，被共享的库会被锁定）。通过 Lua 中 `addappid` 添加的游戏不受影响
 
 ### 兼容 Denuvo 和 SteamStub 保护的游戏
 - 仅 SteamStub 保护的游戏不需要配置 `AppTicket`。AmethystTool 可以重用 Steam 本地 ConfigStore 令牌，通过 SteamDRMP 令牌解析漏洞伪造请求的 AppId，无需注入游戏进程
