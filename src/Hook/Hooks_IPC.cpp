@@ -1,5 +1,6 @@
 #include "dllmain.h"
 #include "Hooks_IPC.h"
+#include "Hooks_IPC_ISteamUGC.h"
 #include "Hooks_IPC_ISteamUser.h"
 #include "Hooks_IPC_ISteamUtils.h"
 #include "HookMacros.h"
@@ -126,7 +127,11 @@ namespace {
 
         IPCDispatch dispatch = ResolveDispatch(pServer, hSteamPipe, pRead);
         // If we didn't find a handler for this message, just pass through to the original function.
-        if(!dispatch.enabled()) return oIPCProcessMessage(pServer, hSteamPipe, pRead, pWrite);
+        if (!dispatch.enabled()) {
+            const bool processed = oIPCProcessMessage(pServer, hSteamPipe, pRead, pWrite);
+            Hooks_IPC_ISteamUGC::TraceCall(pRead, pWrite, processed);   // diagnostic only
+            return processed;
+        }
 
         // If we did find a handler, run the pre-handler
         if (dispatch.handler->pre)
@@ -139,6 +144,7 @@ namespace {
         if (result && dispatch.handler->post)
             dispatch.handler->post(dispatch.pipe, pRead, pWrite);
 
+        Hooks_IPC_ISteamUGC::TraceCall(pRead, pWrite, result);   // diagnostic only
         return result;
     }
 
@@ -154,6 +160,7 @@ namespace Hooks_IPC {
         // IPCLoader metadata happens inside RegisterHandlers.
         Hooks_IPC_ISteamUser::Register();
         Hooks_IPC_ISteamUtils::Register();
+        Hooks_IPC_ISteamUGC::Register();
 
         LOG_IPC_INFO("Hooks_IPC: {} handlers registered", g_Handlers.size());
 

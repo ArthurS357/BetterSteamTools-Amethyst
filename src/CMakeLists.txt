@@ -167,6 +167,7 @@ add_library(AmethystTool SHARED
     Hook/Hooks_CallBack.cpp
     Hook/Hooks_Decryption.cpp
     Hook/Hooks_IPC.cpp
+    Hook/Hooks_IPC_ISteamUGC.cpp
     Hook/Hooks_IPC_ISteamUser.cpp
     Hook/Hooks_IPC_ISteamUtils.cpp
     Hook/Hooks_KeyValues.cpp
