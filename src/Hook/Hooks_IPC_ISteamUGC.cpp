@@ -1,21 +1,54 @@
-// Hooks_IPC_ISteamUGC - DIAGNOSTIC ONLY (v1.4.0 workshop investigation).
+// Hooks_IPC_ISteamUGC - Workshop (UGC) support for Lua-managed apps (v1.4.0).
 //
-// Observes IClientUGC / IClientRemoteStorage traffic for Lua-managed apps and logs it.
-// It never changes a request or a response. Everything is compiled out of Release
-// builds together with the LOG_IPC_* macros.
-//
-// Two layers:
-//   * Register(): typed post-handlers. Only active when the IPC spec TOML for this
-//     steamclient build lists the IClientUGC methods (see "[Handler Disabled]" in ipc.log).
-//   * TraceCall(): raw dump keyed by interface id, independent of the spec.
+//   * OverrideAPICallResult(): ACTIVE IN ALL BUILDS. Rewrites access/license EResults of
+//     Workshop / RemoteStorage API-call results to k_EResultOK (decision logic and the
+//     byte patch live in Utils/SteamMetadata/UgcLogic, which is unit-tested).
+//   * Everything below the #ifdef is DIAGNOSTIC ONLY: observes IClientUGC /
+//     IClientRemoteStorage traffic and logs it. It never changes a request or a
+//     response, and is compiled out of Release builds together with the LOG_IPC_*
+//     macros.
+//       - Register(): typed post-handlers. Only active when the IPC spec TOML for this
+//         steamclient build lists the IClientUGC methods (see "[Handler Disabled]" in ipc.log).
+//       - TraceCall(): raw dump keyed by interface id, independent of the spec.
 #include "Hooks_IPC.h"
 #include "Hooks_IPC_ISteamUGC.h"
-
-#ifdef OPENSTEAMTOOL_LOGGING_ENABLED
-
 #include "Hooks_Misc.h"
 #include "Utils/Config/LuaConfig.h"
 #include "Utils/Logging/Log.h"
+#include "Utils/SteamMetadata/UgcLogic.h"
+
+// UgcLogic is Steam-header-free so it can build on the Linux CI; keep its EResult
+// copies honest against the real enum.
+static_assert(UgcLogic::kEResultOK == k_EResultOK);
+static_assert(UgcLogic::kEResultFail == k_EResultFail);
+static_assert(UgcLogic::kEResultInvalidParam == k_EResultInvalidParam);
+static_assert(UgcLogic::kEResultInvalidState == k_EResultInvalidState);
+static_assert(UgcLogic::kEResultAccessDenied == k_EResultAccessDenied);
+static_assert(UgcLogic::kEResultInsufficientPrivilege == k_EResultInsufficientPrivilege);
+
+namespace Hooks_IPC_ISteamUGC {
+
+    void OverrideAPICallResult(CUtlBuffer* pWrite, uint32 iCallbackExpected, uint32 cubCallback) {
+        // Cheap early-out before touching the response.
+        if (!UgcLogic::IsEResultLeadingCallback(iCallbackExpected)) return;
+
+        IPCMessages::IClientUtils::GetAPICallResultResp resp{pWrite, cubCallback};
+        // Response shorter than declared, call not completed, or the call itself failed:
+        // the callback bytes mean nothing -> leave the response alone.
+        if (!resp.ok() || !resp.returnValue() || resp.pbFailed()) return;
+
+        const AppId_t appId = Hooks_Misc::ResolveAppId();
+        const auto original = UgcLogic::TryOverrideCallback(appId, LuaConfig::HasDepot(appId),
+                                                            iCallbackExpected, resp.pCallback());
+        if (original) {
+            LOG_IPC_DEBUG("UGC override: AppId={} callback={} result {} -> OK", appId, iCallbackExpected, *original);
+        }
+    }
+
+} // namespace Hooks_IPC_ISteamUGC
+
+#ifdef OPENSTEAMTOOL_LOGGING_ENABLED
+
 #include "Utils/SteamMetadata/IPCLoader.h"
 
 #include <algorithm>

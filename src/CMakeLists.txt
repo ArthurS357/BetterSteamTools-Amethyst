@@ -146,6 +146,7 @@ add_library(AmethystTool SHARED
     Utils/SteamMetadata/RemoteToml.cpp
     Utils/SteamMetadata/StatsClient.cpp
     Utils/SteamMetadata/SteamDiagnostics.cpp
+    Utils/SteamMetadata/UgcLogic.cpp
     Utils/Tokeer/TokeerBridge.cpp
     Utils/Tokeer/TokeerParsing.cpp
     Utils/Tokeer/TokeerUri.cpp

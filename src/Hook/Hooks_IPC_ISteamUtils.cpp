@@ -1,4 +1,5 @@
 #include "Hooks_IPC.h"
+#include "Hooks_IPC_ISteamUGC.h"
 #include "Hooks_IPC_ISteamUtils.h"
 #include "Hooks_Misc.h"
 #include "PendingAPICalls.h"
@@ -91,6 +92,9 @@ namespace {
                 return;
             }
         }
+        // Not a ticket callback: Workshop/RemoteStorage results get their access/license
+        // EResult rewritten to OK (no-op for every other callback id).
+        Hooks_IPC_ISteamUGC::OverrideAPICallResult(pWrite, req.iCallbackExpected(), req.cubCallback());
     }
 
 } // namespace

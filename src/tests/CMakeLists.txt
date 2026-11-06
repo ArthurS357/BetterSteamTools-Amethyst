@@ -148,6 +148,7 @@ add_executable(AmethystToolTests
     compat_alias_logic_test.cpp
     achievements_logic_test.cpp
     rich_presence_logic_test.cpp
+    ugc_logic_test.cpp
 
     # Units under test, compiled directly (no OSTPlatform lib link) — see header.
     "${_ostp}/Numbers.cpp"
@@ -190,6 +191,9 @@ add_executable(AmethystToolTests
     # only, so they also build in the Linux CI (see .github/workflows/).
     "${CMAKE_CURRENT_SOURCE_DIR}/../Hook/AchievementsLogic.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/../Hook/RichPresenceLogic.cpp"
+    # Workshop (UGC) EResult override decision + callback patch, split out of
+    # Hooks_IPC_ISteamUGC.cpp; <cstdint>/<span> only, also built by the Linux CI.
+    "${CMAKE_CURRENT_SOURCE_DIR}/../Utils/SteamMetadata/UgcLogic.cpp"
     "${_ostp}/Windows/MemoryQuery.cpp"
     # Binary-KeyValues schema/stats join behind LocalAchievements::Read, split
     # out so it compiles here without dllmain.h, spdlog or any file IO.

@@ -54,6 +54,8 @@ set(LOGIC_TESTS
     achievements_logic_test.cpp
     rich_presence_logic_test.cpp
     compat_alias_logic_test.cpp
+    # new in v1.4.0 (-Werror, see below)
+    ugc_logic_test.cpp
     # header-only logic
     pattern_refresh_logic_test.cpp
     pattern_loader_logic_test.cpp
@@ -78,6 +80,7 @@ set(LOGIC_UNITS
     Hook/AchievementsLogic.cpp
     Hook/RichPresenceLogic.cpp
     Hook/OnlineFixLogic.cpp
+    Utils/SteamMetadata/UgcLogic.cpp
     Utils/Config/CompatAliasLogic.cpp
     Utils/Config/ConfigMigration.cpp
     Utils/Achievements/LocalAchievementsLogic.cpp
@@ -115,9 +118,11 @@ foreach(f IN ITEMS
         "${_tests}/achievements_logic_test.cpp"
         "${_tests}/rich_presence_logic_test.cpp"
         "${_tests}/compat_alias_logic_test.cpp"
+        "${_tests}/ugc_logic_test.cpp"
         "${_src}/Hook/AchievementsLogic.cpp"
         "${_src}/Hook/RichPresenceLogic.cpp"
-        "${_src}/Utils/Config/CompatAliasLogic.cpp")
+        "${_src}/Utils/Config/CompatAliasLogic.cpp"
+        "${_src}/Utils/SteamMetadata/UgcLogic.cpp")
     set_source_files_properties("${f}" PROPERTIES COMPILE_OPTIONS "-Werror")
 endforeach()
 
