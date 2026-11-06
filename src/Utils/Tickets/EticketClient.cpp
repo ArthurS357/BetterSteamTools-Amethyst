@@ -33,7 +33,7 @@ namespace {
 #endif
 
     std::string EticketUrl() {
-        const std::string& configured = LuaConfig::GetEticketUrl();
+        const std::string configured = LuaConfig::GetEticketUrl();
         if (!configured.empty()) return configured;
         return std::string(OST_ETICKET_URL);
     }
