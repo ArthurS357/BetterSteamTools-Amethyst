@@ -37,7 +37,11 @@ namespace Hooks_IPC_ISteamUGC {
         // the callback bytes mean nothing -> leave the response alone.
         if (!resp.ok() || !resp.returnValue() || resp.pbFailed()) return;
 
-        const AppId_t appId = Hooks_Misc::ResolveAppId();
+        // Pipe-bound AppID, deliberately NOT ResolveAppId(): while -onlinefix is active that
+        // returns the global real AppID for EVERY pipe, which would make an unrelated pipe
+        // (a licensed game, the Steam UI) look Lua-managed and mask its real Workshop errors.
+        // 0 (not a game pipe / engine not captured yet) => nothing is touched.
+        const AppId_t appId = Hooks_Misc::GetAppIDForCurrentPipeWrap();
         const auto original = UgcLogic::TryOverrideCallback(appId, LuaConfig::HasDepot(appId),
                                                             iCallbackExpected, resp.pCallback());
         if (original) {
