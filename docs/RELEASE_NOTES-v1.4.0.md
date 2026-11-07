@@ -1,7 +1,5 @@
 # AmethystTool v1.4.0
 
-> **DRAFT.** Release candidate `v1.4.0-rc1` is for batch testing only. The `v1.4.0` tag is not created until the tests below are validated.
-
 Base: v1.3.6 (`7ecd53b`). Feature release.
 
 ## Highlights
@@ -32,11 +30,24 @@ Steam's IPC, network and pipe threads read the Lua-derived tables (which depots/
 - The Lua interpreter is now locked too, so a `.lua` reload can no longer corrupt a manifest-code callback running at the same time. The lock is released during `http_get`/`http_post`, so a slow request in one script does not hold up the others.
 - **Reloading a `.lua` file no longer makes its games disappear.** The new version is built on the side and swapped in all at once, so Steam sees the old file or the new one, never a gap, even if a script spends seconds in `http_get`.
 - **A file that was half-saved keeps its previous version.** If the file cannot be opened, is empty, or ends in the middle of a statement (which also covers a syntax error), the version already loaded stays active and a warning is logged. A single failing statement, such as a call to an unknown function, is still just skipped, as before. `setAppTicket`/`setETicket` take effect while the script runs and are not undone in this case.
-- **Behaviour change:** emptying a `.lua` file no longer removes its games while Steam runs. To remove them, delete the file; an emptied file also takes effect on the next Steam start.
 - The tool's own changes to the injected license list are now serialized and worked out from the current configuration. Two Steam threads can no longer both inject the initial list, and a `.lua` reload can no longer leave duplicate or stale entries in it. Reloading a file without changing its games no longer touches the list at all, though the library refresh still runs.
-- Fixed three more crashes in the same area: a second license list arriving while the first was being processed (for example after a reconnect), an `http_get`/`http_post` header table with a non-string entry (that entry is now skipped), and a script that sets a raising `__index` on `_G`, as strict-mode helpers do. As a result, `fetch_manifest_code` and `fetch_manifest_code_ex` must be plain globals: defining them behind a custom `_G` metatable no longer works.
-- No configuration change is required: this release does not need any edits to `amethysttool.toml` or your `.lua` files.
+- No configuration change is required: this release does not need any edits to `amethysttool.toml`, and ordinary `.lua` files keep working as they are.
 - Not fully solvable from here: Steam's own threads read the injected license list without any lock this tool can take, so changing it can still race with them. The window is short and only opens when a reload really adds or removes a game; the fix would be to apply the change on Steam's own thread.
+
+## Three more crash fixes
+
+These were already in earlier versions and could take Steam down:
+
+- **A second license list during processing.** If Steam delivered a new list while the previous one was still being walked (for example after a reconnect), the tool read freed memory.
+- **Bad `http_get`/`http_post` headers.** A header table with a non-string entry, such as `http_get(url, {a={}})`, crashed Steam. That entry is now skipped with a warning; the other headers are still sent.
+- **Strict-mode scripts.** A script that sets a raising `__index` on `_G`, as strict-mode helpers do, aborted Steam.
+
+## Behaviour changes
+
+Two things a `.lua` file could do before now work differently:
+
+- **Emptying a `.lua` file no longer removes its games while Steam runs.** A file read as empty looks exactly like a save in progress, so the loaded version stays. To remove the games, delete the file; an emptied file also takes effect on the next Steam start.
+- **`fetch_manifest_code` and `fetch_manifest_code_ex` must be plain globals.** Defining them behind a custom `_G` metatable (a custom `__index`, or a `__newindex` that stores them elsewhere) no longer works, and nothing is logged when they are not found. This is what makes the strict-mode fix possible. It is not a security boundary: `.lua` files are still fully trusted code, so only load ones you trust.
 
 ## Carried over from earlier releases
 
@@ -59,4 +70,6 @@ Validated locally on Windows (2026-11-06):
 
 The new concurrency tests run the real `LuaConfig.cpp` and the real Lua interpreter. Run against the code each one fixes, 8 of those 10 tests fail, several by crashing the process; the other 2 pin behaviour that was deliberately kept.
 
-There is no ThreadSanitizer on MSVC, so the race detector only runs on Linux CI (`Linux logic tests`, TSan and ASan+UBSan). The injected license list cannot be exercised without Steam, so that part rests on code review and on unit tests of its decision logic. Real-world testing of the three areas above is what this release candidate is for.
+Validated on Linux CI (`Linux logic tests`), since MSVC has no ThreadSanitizer: those 10 tests pass under ThreadSanitizer and under ASan+UBSan with Lua itself instrumented, and 284 pure-logic tests pass under ASan+UBSan.
+
+What these checks do not cover: none of them runs inside a live Steam client. The injected license list and the license-list hand-over cannot be exercised without Steam, so they rest on code review and, for the list's decision logic, on unit tests.
