@@ -146,3 +146,31 @@ interface IClientUtils {
         out bool   pbFailed
     );
 }
+
+// IClientUGC - Workshop (ISteamUGC) item management. DIAGNOSTIC ONLY (v1.4.0).
+//
+// Layouts below follow the public ISteamUGC signatures and are UNVERIFIED against
+// the internal IClientUGC wire format (it may carry extra args such as an AppId).
+// Req/Resp ok() fails if the body is shorter than declared; the handlers log that
+// as a layout mismatch. Hooks_IPC_ISteamUGC::TraceCall dumps the raw bytes either way.
+interface IClientUGC {
+    SteamAPICall_t SubscribeItem(in uint64 nPublishedFileID);
+
+    SteamAPICall_t UnsubscribeItem(in uint64 nPublishedFileID);
+
+    uint32 GetItemState(in uint64 nPublishedFileID);
+
+    bool GetItemDownloadInfo(
+        in  uint64 nPublishedFileID,
+        out uint64 punBytesDownloaded,
+        out uint64 punBytesTotal
+    );
+
+    bool GetItemInstallInfo(
+        in  uint64 nPublishedFileID,
+        in  uint32 cchFolderSize,
+        out uint64 punSizeOnDisk,
+        out bytes  pchFolder[cchFolderSize],
+        out uint32 punTimeStamp
+    );
+}

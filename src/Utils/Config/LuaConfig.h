@@ -9,6 +9,10 @@
 #include <unordered_map>
 #include <vector>
 
+// Thread-safety: every function here may be called from any thread, concurrently
+// with a Lua hot-reload (ParseFile / UnloadFile / ReloadDirectories / MarkOwned).
+// Queries return copies, never references into the live tables. See the
+// "Concurrency contract" in LuaConfig.cpp before adding state or an accessor.
 namespace LuaConfig{
     bool HasDepot(AppId_t appId, bool checkOwned=true);
     bool IsOwned(AppId_t appId);
@@ -26,7 +30,10 @@ namespace LuaConfig{
           uint64_t gid;
           uint64_t size;
     };
-    const std::unordered_map<uint64_t, ManifestOverride>& GetManifestOverrides();
+    // Snapshot copy: a reference would dangle across a concurrent reload.
+    std::unordered_map<uint64_t, ManifestOverride> GetManifestOverrides();
+    // Cheap single-key membership test (no table copy).
+    bool HasManifestOverride(uint64_t depotId);
 
     void ParseFile(const std::string& filePath);
     void UnloadFile(const std::string& filePath);
@@ -61,7 +68,7 @@ namespace LuaConfig{
     // On-demand eticket backend URL set via seteticketurl() in Lua config.
     // Empty string means the feature is disabled and EticketClient falls
     // back to the static credential-store ticket (original behaviour).
-    const std::string& GetEticketUrl();
+    std::string GetEticketUrl();
 }
 
 #endif // LUACONFIG_H

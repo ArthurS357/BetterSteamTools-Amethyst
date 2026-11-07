@@ -94,7 +94,7 @@ namespace {
         RecordDepots(pDepotInfo);
         RecordDepots(pSharedDepotInfo);
 
-        const auto& overrides = LuaConfig::GetManifestOverrides();
+        const auto overrides = LuaConfig::GetManifestOverrides();  // snapshot copy
 
         // Apply manifest overrides in place (only depots a lua explicitly
         // pins). The patched gid is what Steam goes on to request, so
@@ -145,7 +145,7 @@ namespace {
         const auto app = static_cast<AppId_t>(appId);
         if (ManifestHookLogic::ShouldPreseedOnManifestLoad(
                 !Config::GetCacheSettings().url.empty(), depotId, manifestGid,
-                LuaConfig::GetManifestOverrides().count(depotId) != 0,
+                LuaConfig::HasManifestOverride(depotId),
                 LuaConfig::HasDepot(depotId, false),
                 LuaConfig::IsOwned(app) || LuaConfig::IsOwned(depotId)))
         {

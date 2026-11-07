@@ -1,5 +1,24 @@
 # Changelog
 
+## [v1.4.0] - 2026-11-06
+
+### Added
+- **Steam Workshop for Lua-managed apps.** License/access errors on a fixed list of Workshop and RemoteStorage callbacks are rewritten to OK, only for apps added through Lua and only for the game process that made the call (`Hooks_IPC_ISteamUGC.cpp`, decision logic in `UgcLogic`). Log-only `IClientUGC` diagnostics in Debug builds.
+- **LuaConfig concurrency tests** against the real `LuaConfig.cpp` and real Lua, with HTTP faked on a latch so the interleavings are deterministic. A new `Linux logic tests` job runs them under ThreadSanitizer and ASan+UBSan with Lua instrumented (`src/tests/linux/luaconfig`), since MSVC has no TSan.
+
+### Fixed
+- **LuaConfig data races.** All config state is guarded by one `std::shared_mutex`; accessors return copies. The Lua interpreter is guarded by `g_luaMutex`, with a per-call coroutine so the lock can be released around `http_get`/`http_post`.
+- **Reload gap.** A reload no longer unloads a file before parsing it: mutations are staged and committed under one exclusive lock, so readers see the old file or the new one. A file that cannot be opened, is empty or ends mid-statement keeps the loaded version.
+- **Injected license list.** This DLL's accesses to `AppIdVec` are serialized, the initial fill runs once, and `NotifyLicenseChanged` reconciles against the current config instead of replaying its queues, which could leave duplicate or stale ids.
+- **3 pre-existing crashes:** Lua strict-mode `__index` panic (lookups outside `lua_pcall` are now raw), null pointer on a non-string `http_get`/`http_post` header entry (the entry is skipped), use-after-free when a second license list arrived mid-walk (handed over under a mutex and walked as a private copy).
+
+### Changed
+- An emptied `.lua` file no longer unloads its games while Steam runs; delete the file instead, or restart Steam.
+- `fetch_manifest_code` and `fetch_manifest_code_ex` must be raw fields of `_G`; defining them behind a custom metatable is no longer seen. Not a security boundary: `.lua` files remain fully trusted code.
+
+### Known limitations
+- Steam's own threads read the injected `AppIdVec` without any lock this tool can take, so changing it during a reload can still race with them.
+
 ## [v1.3.6] - 2026-11-04
 
 Hotfix. Built from the v1.3.5 tip (the `main` branch predates v1.3.4 and carries neither this changelog nor the Linux CI).

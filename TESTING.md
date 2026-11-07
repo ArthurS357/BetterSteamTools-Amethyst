@@ -77,6 +77,14 @@ cmake --build build-linux-tests
 
 It needs only a C++20 compiler, CMake and GoogleTest (`sudo apt-get install g++ cmake ninja-build libgtest-dev`). It covers the tests that need nothing from Windows; the full suite (`AmethystToolTests`, built by `build.ps1`) is still the one that counts before a release. The list of what runs where is at the top of `src/tests/linux/CMakeLists.txt`.
 
+The same action also runs the LuaConfig concurrency tests under ThreadSanitizer and ASan+UBSan, with Lua itself instrumented. MSVC has no ThreadSanitizer, so this is the only race detector the locking gets:
+
+```bash
+cmake -S src/tests/linux/luaconfig -B build-luaconfig -G Ninja -DLUACONFIG_SANITIZE=thread
+cmake --build build-luaconfig
+./build-luaconfig/LuaConfigConcurrencyTests
+```
+
 ## 5. Check the logs
 
 Debug builds write per-module log files to **`<Steam>\amethysttool\`** (inside the Steam install directory, next to `steam.exe` — not under `%AppData%`). Start with:
