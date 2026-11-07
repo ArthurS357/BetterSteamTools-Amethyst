@@ -101,6 +101,19 @@ namespace LuaConfig{
         LuaMutexRelease& operator=(const LuaMutexRelease&) = delete;
     };
 
+    // Raw on purpose, for lookups made outside lua_pcall: a script can replace _G's
+    // metatable, and an __index that raises (strict-mode style) would escape with no
+    // handler and abort Steam through the panic function. The contract this sets: only
+    // raw fields of _G count, so fetch_manifest_code* defined behind a custom __index
+    // or a proxying __newindex is not seen. The default case-insensitive __index never
+    // resolved these two names, so ordinary scripts see no difference.
+    static void PushRawGlobal(lua_State* L, const char* name) {
+        lua_pushglobaltable(L);
+        lua_pushstring(L, name);
+        lua_rawget(L, -2);
+        lua_remove(L, -2);
+    }
+
     // Non-null while this thread runs a file in ParseFile. thread_local, not a
     // global: a manifest callback on another thread may call addappid during that
     // parse, and must not have its mutation attributed to the file being parsed.
@@ -218,10 +231,18 @@ namespace LuaConfig{
         if (idx < 1 || !lua_istable(L, idx)) return headers;
         lua_pushnil(L);
         while (lua_next(L, idx)) {
-            std::string key(lua_tostring(L, -2));
-            std::string val(lua_tostring(L, -1));
-            headers += std::wstring(key.begin(), key.end())
-                    + L": " + std::wstring(val.begin(), val.end()) + L"\r\n";
+            // lua_tostring returns null for a table or boolean, and on a number key
+            // converts it in place, which breaks lua_next. Number values are fine
+            // ("Content-Length": 5). A malformed entry costs that header, not Steam.
+            // The entry is not logged: header values can hold credentials.
+            if (lua_type(L, -2) == LUA_TSTRING && lua_isstring(L, -1)) {
+                std::string key(lua_tostring(L, -2));
+                std::string val(lua_tostring(L, -1));
+                headers += std::wstring(key.begin(), key.end())
+                        + L": " + std::wstring(val.begin(), val.end()) + L"\r\n";
+            } else {
+                LOG_WARN("http_get/http_post: skipped a header whose key or value is not a string");
+            }
             lua_pop(L, 1);
         }
         return headers;
@@ -747,7 +768,7 @@ namespace LuaConfig{
         LuaCall call;
         lua_State* L = call.get();
 
-        lua_getglobal(L, "fetch_manifest_code");
+        PushRawGlobal(L, "fetch_manifest_code");
         lua_pushinteger(L, static_cast<lua_Integer>(gid));
 
         if (lua_pcall(L, 1, 1, 0) != LUA_OK) {
@@ -801,7 +822,7 @@ namespace LuaConfig{
         LuaCall call;
         lua_State* L = call.get();
 
-        lua_getglobal(L, "fetch_manifest_code_ex");
+        PushRawGlobal(L, "fetch_manifest_code_ex");
         lua_pushinteger(L, static_cast<lua_Integer>(app_id));
         lua_pushinteger(L, static_cast<lua_Integer>(depot_id));
         lua_pushinteger(L, static_cast<lua_Integer>(gid));
@@ -1035,7 +1056,7 @@ namespace LuaConfig{
             // Check for manifest code functions after parsing. Each flag is stored
             // once (not reset to false first) so a concurrent HasManifestCodeFunc*()
             // never sees a transient false while the function is still defined.
-            lua_getglobal(L, "fetch_manifest_code");
+            PushRawGlobal(L, "fetch_manifest_code");
             const bool hasCodeFunc = lua_isfunction(L, -1);
             lua_pop(L, 1);
             g_hasManifestCodeFunc = hasCodeFunc;
@@ -1043,7 +1064,7 @@ namespace LuaConfig{
                 LOG_INFO("manifest.lua: fetch_manifest_code found");
             }
 
-            lua_getglobal(L, "fetch_manifest_code_ex");
+            PushRawGlobal(L, "fetch_manifest_code_ex");
             const bool hasCodeFuncEx = lua_isfunction(L, -1);
             lua_pop(L, 1);
             g_hasManifestCodeFuncEx = hasCodeFuncEx;

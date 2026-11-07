@@ -115,8 +115,16 @@ namespace {
     // needs GetPackageInfo, whose `this` is captured from Steam's own first
     // call — which normally has not happened by the time the list lands. So the
     // list is parked here and drained on the next CheckAppOwnership.
+    //
+    // OnLicenseList runs on the network thread and the drain on a Steam thread, and a
+    // reconnect can deliver a second list mid-walk, so the list is handed over under
+    // this mutex and walked as a private copy: the walk calls GetPackageInfo, which
+    // no lock may be held across.
+    std::mutex g_pendingLicensesMutex;
     std::vector<Hooks_Package::License> g_pendingLicenses;
-    bool g_ownedDepotsDumped = false;
+    // TryDumpOwnedDepots runs on every CheckAppOwnership: this keeps it lock-free.
+    std::atomic<bool> g_licensesPending{false};
+    std::atomic<bool> g_dumpRunning{false};
 
     // Filled by the same walk that logs. Read from other threads eventually
     // (once a network-facing consumer of GetOwnedDepots exists), written from
@@ -139,11 +147,11 @@ namespace {
         return out;
     }
 
-    void DumpOwnedDepots() {
+    void DumpOwnedDepots(const std::vector<Hooks_Package::License>& licenses) {
         size_t totalDepots = 0, resolved = 0, unresolved = 0;
         std::vector<uint32_t> owned;
 
-        for (const auto& lic : g_pendingLicenses) {
+        for (const auto& lic : licenses) {
             PackageInfo* pPkg = oGetPackageInfo(g_pCPackageInfo, lic.packageId, lic.accessToken);
             if (!pPkg) {
                 // Usually a package whose info has not been cached yet rather
@@ -247,19 +255,31 @@ namespace {
 namespace Hooks_Package {
 
     void OnLicenseList(std::vector<License> licenses) {
-        g_pendingLicenses  = std::move(licenses);
-        g_ownedDepotsDumped = false;
+        std::scoped_lock lock(g_pendingLicensesMutex);
+        g_pendingLicenses = std::move(licenses);
+        g_licensesPending = true;
     }
 
     void TryDumpOwnedDepots() {
-        if (g_ownedDepotsDumped || g_pendingLicenses.empty()) return;
+        if (!g_licensesPending) return;
         if (!CAPTURE_READY(GetPackageInfo)) return;
 
-        // Set before dumping, not after: DumpOwnedDepots calls back into
+        // Claimed before dumping, not after: DumpOwnedDepots calls back into
         // steamclient, and CheckAppOwnership is what drives us — without this
-        // a re-entrant call would start a second dump.
-        g_ownedDepotsDumped = true;
-        DumpOwnedDepots();
+        // a re-entrant call would start a second dump. It also stops a slower walk
+        // of an old list overwriting a newer one's result. A list that lands
+        // meanwhile stays pending for the next call.
+        if (g_dumpRunning.exchange(true)) return;
+
+        std::vector<License> licenses;
+        {
+            std::scoped_lock lock(g_pendingLicensesMutex);
+            licenses.swap(g_pendingLicenses);
+            g_licensesPending = false;
+        }
+        if (!licenses.empty()) DumpOwnedDepots(licenses);
+
+        g_dumpRunning = false;
     }
 
     OwnedDepots GetOwnedDepots() {

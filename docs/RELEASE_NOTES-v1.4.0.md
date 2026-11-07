@@ -34,6 +34,7 @@ Steam's IPC, network and pipe threads read the Lua-derived tables (which depots/
 - **A file that was half-saved keeps its previous version.** If the file cannot be opened, is empty, or ends in the middle of a statement (which also covers a syntax error), the version already loaded stays active and a warning is logged. A single failing statement, such as a call to an unknown function, is still just skipped, as before. `setAppTicket`/`setETicket` take effect while the script runs and are not undone in this case.
 - **Behaviour change:** emptying a `.lua` file no longer removes its games while Steam runs. To remove them, delete the file; an emptied file also takes effect on the next Steam start.
 - The tool's own changes to the injected license list are now serialized and worked out from the current configuration. Two Steam threads can no longer both inject the initial list, and a `.lua` reload can no longer leave duplicate or stale entries in it. Reloading a file without changing its games no longer touches the list at all, though the library refresh still runs.
+- Fixed three more crashes in the same area: a second license list arriving while the first was being processed (for example after a reconnect), an `http_get`/`http_post` header table with a non-string entry (that entry is now skipped), and a script that sets a raising `__index` on `_G`, as strict-mode helpers do. As a result, `fetch_manifest_code` and `fetch_manifest_code_ex` must be plain globals: defining them behind a custom `_G` metatable no longer works.
 - No configuration change is required: this release does not need any edits to `amethysttool.toml` or your `.lua` files.
 - Not fully solvable from here: Steam's own threads read the injected license list without any lock this tool can take, so changing it can still race with them. The window is short and only opens when a reload really adds or removes a game; the fix would be to apply the change on Steam's own thread.
 
@@ -52,10 +53,10 @@ Steam's IPC, network and pipe threads read the Lua-derived tables (which depots/
 ## Verification
 
 Validated locally on Windows (2026-11-06):
-- `.\build.ps1 -Clean`: 382/382 tests in Release and Debug.
+- `.\build.ps1 -Clean`: 384/384 tests in Release and Debug.
 - Warnings: Release 9 / Debug 8 (baseline).
 - ABI: `TokeerUri` ordinal 1. CRT: `/MT` static.
 
-The new concurrency tests run the real `LuaConfig.cpp` and the real Lua interpreter. Against the previous `LuaConfig.cpp`, 6 of those 8 tests fail and the stress test crashes; the other 2 pin behaviour that was deliberately kept.
+The new concurrency tests run the real `LuaConfig.cpp` and the real Lua interpreter. Run against the code each one fixes, 8 of those 10 tests fail, several by crashing the process; the other 2 pin behaviour that was deliberately kept.
 
 There is no ThreadSanitizer on MSVC, so the race detector only runs on Linux CI (`Linux logic tests`, TSan and ASan+UBSan). The injected license list cannot be exercised without Steam, so that part rests on code review and on unit tests of its decision logic. Real-world testing of the three areas above is what this release candidate is for.
