@@ -41,12 +41,17 @@ namespace {
     std::condition_variable g_httpCv;
     bool g_httpEntered = false;
     bool g_httpReleased = false;
+    std::wstring g_httpLastHeaders;
 }
 
 // ── Link-time fakes ─────────────────────────────────────────────
 namespace OSTPlatform::Http {
-    Result Execute(const wchar_t*, const char* url, const void*, uint32_t, const wchar_t*,
+    Result Execute(const wchar_t*, const char* url, const void*, uint32_t, const wchar_t* headers,
                    uint32_t, uint32_t, uint32_t, uint32_t, uint32_t) {
+        if (headers) {
+            std::scoped_lock lock(g_httpMutex);
+            g_httpLastHeaders = headers;
+        }
         if (kBlockingUrl == url) {
             std::unique_lock lock(g_httpMutex);
             g_httpEntered = true;
@@ -248,6 +253,62 @@ TEST_F(LuaConfigConcurrency, ManifestCallbackRunsWhileAParseIsBlockedInHttp) {
     LuaConfig::UnloadFile(blocker);
     EXPECT_FALSE(LuaConfig::HasDepot(5001, false));
     EXPECT_TRUE(LuaConfig::HasDepot(5009, false)) << "callback's addappid was attributed to the parse";
+}
+
+// A table value used to reach std::string as a null pointer and take Steam down.
+TEST_F(LuaConfigConcurrency, MalformedHttpHeadersAreSkippedAndValidOnesKept) {
+    const std::string file = WriteLua("headers.lua",
+        "http_get('test://ok', {Accept='json', ['X-Count']=5, nested={}, flag=true, [1]='array'})\n"
+        "addappid(7001)\n");
+    LuaConfig::ParseFile(file);
+
+    EXPECT_TRUE(LuaConfig::HasDepot(7001, false)) << "the script did not get past http_get";
+
+    std::wstring headers;
+    {
+        std::scoped_lock lock(g_httpMutex);
+        headers = g_httpLastHeaders;
+    }
+    EXPECT_NE(headers.find(L"Accept: json\r\n"), std::wstring::npos);
+    EXPECT_NE(headers.find(L"X-Count: 5\r\n"), std::wstring::npos);
+    EXPECT_EQ(headers.find(L"nested"), std::wstring::npos);
+    EXPECT_EQ(headers.find(L"flag"), std::wstring::npos);
+    EXPECT_EQ(headers.find(L"array"), std::wstring::npos);
+}
+
+// A raising __index on _G used to reach the lookups made outside lua_pcall, which
+// aborts the process through Lua's panic function. __index only fires for a missing
+// name, so this makes each of the four lookups find its name missing. No ASSERT: the
+// metatable must be restored at the end, because leaving it would break the
+// case-insensitive lookup later tests rely on when they share this process.
+TEST_F(LuaConfigConcurrency, GlobalLookupsSurviveARaisingIndexMetamethod) {
+    uint64_t code = 0;
+
+    // ParseFile's lookup of the undefined fetch_manifest_code_ex.
+    LuaConfig::ParseFile(WriteLua("strict.lua",
+        "saved_global_mt = getmetatable(_G)\n"
+        "function fetch_manifest_code(gid) fetch_manifest_code = nil return '777' end\n"
+        "setmetatable(_G, {__index = function(t, k) error('strict: undefined ' .. k) end})\n"));
+    EXPECT_FALSE(LuaConfig::HasManifestCodeFuncEx());
+    EXPECT_TRUE(LuaConfig::HasManifestCodeFunc());
+
+    // The callback removes itself while the flag still says it exists: the second
+    // call's lookup misses, and a missing function must read as a failed call.
+    EXPECT_TRUE(LuaConfig::CallManifestFetchCode(42, &code));
+    EXPECT_EQ(code, 777u);
+    EXPECT_FALSE(LuaConfig::CallManifestFetchCode(42, &code));
+
+    // ParseFile's lookup of the now-removed fetch_manifest_code, then the same
+    // self-removal through the _ex entry point.
+    LuaConfig::ParseFile(WriteLua("strict_ex.lua",
+        "function fetch_manifest_code_ex(app, depot, gid) fetch_manifest_code_ex = nil return '778' end\n"));
+    EXPECT_FALSE(LuaConfig::HasManifestCodeFunc());
+    EXPECT_TRUE(LuaConfig::HasManifestCodeFuncEx());
+    EXPECT_TRUE(LuaConfig::CallManifestFetchCodeEx(1, 2, 42, &code));
+    EXPECT_EQ(code, 778u);
+    EXPECT_FALSE(LuaConfig::CallManifestFetchCodeEx(1, 2, 42, &code));
+
+    LuaConfig::ParseFile(WriteLua("unstrict.lua", "setmetatable(_G, saved_global_mt)\n"));
 }
 
 // Readers, reloaders and manifest callers all at once. Besides surviving, it asserts
