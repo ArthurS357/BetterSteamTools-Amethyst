@@ -56,6 +56,7 @@ set(LOGIC_TESTS
     compat_alias_logic_test.cpp
     # new in v1.4.0 (-Werror, see below)
     ugc_logic_test.cpp
+    package_reconcile_logic_test.cpp
     # header-only logic
     pattern_refresh_logic_test.cpp
     pattern_loader_logic_test.cpp
@@ -119,6 +120,7 @@ foreach(f IN ITEMS
         "${_tests}/rich_presence_logic_test.cpp"
         "${_tests}/compat_alias_logic_test.cpp"
         "${_tests}/ugc_logic_test.cpp"
+        "${_tests}/package_reconcile_logic_test.cpp"
         "${_src}/Hook/AchievementsLogic.cpp"
         "${_src}/Hook/RichPresenceLogic.cpp"
         "${_src}/Utils/Config/CompatAliasLogic.cpp"

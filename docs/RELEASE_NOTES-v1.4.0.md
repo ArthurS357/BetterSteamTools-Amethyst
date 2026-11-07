@@ -29,8 +29,13 @@ Steam's IPC, network and pipe threads read the Lua-derived tables (which depots/
 
 - All of that state is now guarded by one reader/writer lock. Readers (the hot path) do not block each other, and the lock is never held while a Lua script runs or while the tool makes a network request, so a slow `http_get` in a script cannot stall Steam.
 - A few internal accessors used to hand out references into the live tables; they now return copies.
-- No behaviour or configuration change is intended: this release does not require any edits to `amethysttool.toml` or your `.lua` files.
-- Not covered by this fix (tracked separately): the Lua interpreter itself is still shared between the file loader and the manifest-code callbacks without a lock, and the injected license list can be extended while Steam is still initializing it.
+- The Lua interpreter is now locked too, so a `.lua` reload can no longer corrupt a manifest-code callback running at the same time. The lock is released during `http_get`/`http_post`, so a slow request in one script does not hold up the others.
+- **Reloading a `.lua` file no longer makes its games disappear.** The new version is built on the side and swapped in all at once, so Steam sees the old file or the new one, never a gap, even if a script spends seconds in `http_get`.
+- **A file that was half-saved keeps its previous version.** If the file cannot be opened, is empty, or ends in the middle of a statement (which also covers a syntax error), the version already loaded stays active and a warning is logged. A single failing statement, such as a call to an unknown function, is still just skipped, as before. `setAppTicket`/`setETicket` take effect while the script runs and are not undone in this case.
+- **Behaviour change:** emptying a `.lua` file no longer removes its games while Steam runs. To remove them, delete the file; an emptied file also takes effect on the next Steam start.
+- The tool's own changes to the injected license list are now serialized and worked out from the current configuration. Two Steam threads can no longer both inject the initial list, and a `.lua` reload can no longer leave duplicate or stale entries in it. Reloading a file without changing its games no longer touches the list at all, though the library refresh still runs.
+- No configuration change is required: this release does not need any edits to `amethysttool.toml` or your `.lua` files.
+- Not fully solvable from here: Steam's own threads read the injected license list without any lock this tool can take, so changing it can still race with them. The window is short and only opens when a reload really adds or removes a game; the fix would be to apply the change on Steam's own thread.
 
 ## Carried over from earlier releases
 
@@ -46,9 +51,11 @@ Steam's IPC, network and pipe threads read the Lua-derived tables (which depots/
 
 ## Verification
 
-Validated locally on Windows (2026-11-06), merged tree `3a38213`:
-- `.\build.ps1 -Clean`: 369/369 tests in Release and Debug.
+Validated locally on Windows (2026-11-06):
+- `.\build.ps1 -Clean`: 382/382 tests in Release and Debug.
 - Warnings: Release 9 / Debug 8 (baseline).
 - ABI: `TokeerUri` ordinal 1. CRT: `/MT` static.
 
-There is no ThreadSanitizer on MSVC, so the concurrency fix is verified by code review (no critical or high findings) and by construction, not by a race detector. Real-world testing of the three areas above is what this release candidate is for.
+The new concurrency tests run the real `LuaConfig.cpp` and the real Lua interpreter. Against the previous `LuaConfig.cpp`, 6 of those 8 tests fail and the stress test crashes; the other 2 pin behaviour that was deliberately kept.
+
+There is no ThreadSanitizer on MSVC, so the race detector only runs on Linux CI (`Linux logic tests`, TSan and ASan+UBSan). The injected license list cannot be exercised without Steam, so that part rests on code review and on unit tests of its decision logic. Real-world testing of the three areas above is what this release candidate is for.

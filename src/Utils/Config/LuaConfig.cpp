@@ -11,12 +11,16 @@
 #include <algorithm>
 #include <atomic>
 #include <cctype>
+#include <chrono>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <mutex>
 #include <shared_mutex>
 #include <string>
+#include <string_view>
 #include <unordered_set>
 #include <vector>
 
@@ -26,11 +30,15 @@ extern "C" {
 
 namespace LuaConfig{
     // ── Concurrency contract ─────────────────────────────────────
-    // Everything below is mutated at runtime (Lua config hot-reload on the
-    // LuaFileWatcher / ConfigFileWatcher threads, MarkOwned from the
+    // Lock order, acquire left to right and never the reverse:
+    //   ManifestClient::g_mutex -> g_luaMutex -> g_stateMutex
+    //   Hooks_Package's g_appIdVecMutex -> g_stateMutex
+    // g_luaMutex and g_appIdVecMutex never nest with each other.
+    //
+    // g_stateMutex: everything below is mutated at runtime (Lua config hot-reload
+    // on the LuaFileWatcher / ConfigFileWatcher threads, MarkOwned from the
     // CheckAppOwnership hook) while Steam's IPC / netpacket / pipe threads read
-    // it on every message. g_stateMutex guards ALL file-scope state in this
-    // file; the rules that keep it deadlock-free:
+    // it on every message. It guards ALL file-scope config state:
     //   * readers take std::shared_lock, mutators std::unique_lock;
     //   * critical sections are short and touch containers only (plus logging,
     //     which never re-enters LuaConfig). NEVER hold it across Lua
@@ -40,21 +48,77 @@ namespace LuaConfig{
     //     public function that locks (HasDepot uses IsOwnedLocked);
     //   * no luaL_error (longjmp, skips destructors) while the lock is held;
     //   * accessors return copies, never references into the containers.
-    // Loading (ParseFile) therefore does NOT hold the lock for the whole parse:
-    // each lua_* callback takes it just for its own mutation.
     //
-    // Known limit (single-flight loading): g_currentFile and g_lua_state are
-    // single slots that are not covered by holding the lock across a parse, so
-    // ParseFile / ReloadDirectories must not run on two threads at once. Today
-    // that holds (the initial parse finishes before the watchers start;
-    // ConfigFileWatcher joins the Lua watcher before ReloadDirectories). The
-    // unsynchronised g_lua_state use between ParseFile and CallManifestFetchCode*
-    // is a separate, pre-existing issue.
-    // ponytail: no separate load mutex; add one (outermost, order: load -> state)
-    // if a second concurrent loader ever appears.
+    // g_luaMutex: the interpreter is not thread-safe, and its global state (GC,
+    // string table) is shared by every coroutine. Every Lua API call runs inside
+    // a LuaCall, which holds this mutex. The only place it is released mid-call
+    // is LuaMutexRelease, around blocking HTTP in http_get/http_post, which no
+    // Lua API may be called from.
+    //
+    // Reload is atomic: while ParseFile runs a script, the lua_* callbacks only
+    // record their mutations (t_stagedOps). The commit then swaps the file's old
+    // contribution for the new one under one exclusive g_stateMutex section, so a
+    // reader sees the old file or the new one, never a gap or a partial parse.
     static std::shared_mutex g_stateMutex;
+    static std::mutex g_luaMutex;
 
     static lua_State* g_lua_state = nullptr;
+
+    // Scope for any code touching Lua: holds g_luaMutex and owns a coroutine, a Lua
+    // stack private to this call. That private stack is what lets LuaMutexRelease
+    // run other Lua code mid-call: releasing the mutex on a shared stack would let
+    // the other caller push onto a frame that is still in use. g_lua_state itself
+    // only anchors these coroutines: no chunk or callback is ever pcall'd on it, so an
+    // error raised on a coroutine has no main-thread errorJmp to longjmp across threads
+    // to. (A script's __gc finalizer is the one thing Lua may run there, when GC fires
+    // inside lua_newthread; it is protected and stack-balanced.)
+    class LuaCall {
+    public:
+        LuaCall()
+            : lock_(g_luaMutex),
+              L_(lua_newthread(g_lua_state)),
+              ref_(luaL_ref(g_lua_state, LUA_REGISTRYINDEX)) {}
+        ~LuaCall() { luaL_unref(g_lua_state, LUA_REGISTRYINDEX, ref_); }
+        LuaCall(const LuaCall&) = delete;
+        LuaCall& operator=(const LuaCall&) = delete;
+
+        [[nodiscard]] lua_State* get() const noexcept { return L_; }
+
+    private:
+        std::unique_lock<std::mutex> lock_;
+        lua_State* L_;
+        int ref_;
+    };
+
+    // Drops g_luaMutex for the scope of a blocking call made from a Lua C function.
+    // No Lua API inside the scope (other threads are running Lua), and no Lua error
+    // can skip the re-lock because none can be raised there.
+    class LuaMutexRelease {
+    public:
+        LuaMutexRelease() { g_luaMutex.unlock(); }
+        ~LuaMutexRelease() { g_luaMutex.lock(); }
+        LuaMutexRelease(const LuaMutexRelease&) = delete;
+        LuaMutexRelease& operator=(const LuaMutexRelease&) = delete;
+    };
+
+    // Non-null while this thread runs a file in ParseFile. thread_local, not a
+    // global: a manifest callback on another thread may call addappid during that
+    // parse, and must not have its mutation attributed to the file being parsed.
+    static thread_local std::vector<std::function<void()>>* t_stagedOps = nullptr;
+
+    // Applies a config mutation now, or defers it to the commit of the file this
+    // thread is parsing. Scripts cannot read config back, so deferring is invisible
+    // to them. `op` runs under exclusive g_stateMutex and must not raise Lua errors.
+    template <class Op>
+    static void ApplyConfigOp(Op op) {
+        if (t_stagedOps) {
+            t_stagedOps->emplace_back(std::move(op));
+            return;
+        }
+        std::unique_lock lock(g_stateMutex);
+        op();
+    }
+
     static std::atomic<bool> g_hasManifestCodeFunc{false};
     static std::atomic<bool> g_hasManifestCodeFuncEx{false};
     // `static`: no other TU can reach these and bypass g_stateMutex.
@@ -73,6 +137,7 @@ namespace LuaConfig{
     static std::string EticketUrl{};
 
     // Per-file tracking: which depots each .lua file contributed.
+    // g_currentFile is non-empty only inside a commit, under exclusive g_stateMutex.
     static std::string g_currentFile;
     static std::unordered_map<std::string, std::unordered_set<AppId_t>> g_fileDepots;
     static std::unordered_map<std::string, std::unordered_map<uint64_t, ManifestOverride>> g_fileManifestOverrides;
@@ -164,9 +229,14 @@ namespace LuaConfig{
 
     static int lua_http_get(lua_State* L) {
         // http_get(url [, headers]) → body, status_code
+        // url stays valid while unlocked: slot 1 of this coroutine's stack anchors it.
+        const char* url = luaL_checkstring(L, 1);
         auto hdrs = LuaHeadersToWstr(L, lua_gettop(L) >= 2 ? 2 : -1);
-        auto r = OSTPlatform::Http::Execute(L"GET", luaL_checkstring(L, 1),
-                                            nullptr, 0, hdrs.empty() ? nullptr : hdrs.c_str());
+        const auto r = [&] {
+            LuaMutexRelease unlocked;
+            return OSTPlatform::Http::Execute(L"GET", url, nullptr, 0,
+                                              hdrs.empty() ? nullptr : hdrs.c_str());
+        }();
         if (r.ok) {
             lua_pushstring(L, r.body.c_str());
             lua_pushinteger(L, r.status);
@@ -179,12 +249,16 @@ namespace LuaConfig{
 
     static int lua_http_post(lua_State* L) {
         // http_post(url, post_body [, headers]) → body, status_code
+        // url and body stay valid while unlocked: this coroutine's stack anchors them.
         size_t bodyLen = 0;
         const char* body = luaL_checklstring(L, 2, &bodyLen);
+        const char* url = luaL_checkstring(L, 1);
         auto hdrs = LuaHeadersToWstr(L, lua_gettop(L) >= 3 ? 3 : -1);
-        auto r = OSTPlatform::Http::Execute(L"POST", luaL_checkstring(L, 1),
-                                            body, static_cast<uint32_t>(bodyLen),
-                                            hdrs.empty() ? nullptr : hdrs.c_str());
+        const auto r = [&] {
+            LuaMutexRelease unlocked;
+            return OSTPlatform::Http::Execute(L"POST", url, body, static_cast<uint32_t>(bodyLen),
+                                              hdrs.empty() ? nullptr : hdrs.c_str());
+        }();
         if (r.ok) {
             lua_pushstring(L, r.body.c_str());
             lua_pushinteger(L, r.status);
@@ -254,29 +328,29 @@ namespace LuaConfig{
                 Key = std::string(key);
             }
         }
-        // Every error path is above: no luaL_error (longjmp) while locked.
-        std::unique_lock lock(g_stateMutex);
+        // Every error path is above: no luaL_error (longjmp) past this point.
+        ApplyConfigOp([DepotId, Key = std::move(Key)] {
+            // Non-empty keys have priority over existing empty keys.
+            if (!Key.empty() || !DepotKeySet.count(DepotId)) {
+                DepotKeySet[DepotId] = Key;
+            }
 
-        // Non-empty keys have priority over existing empty keys.
-        if (!Key.empty() || !DepotKeySet.count(DepotId)) {
-            DepotKeySet[DepotId] = Key;
-        }
+            if (!g_currentFile.empty()) {
+                if (g_fileDepots[g_currentFile].insert(DepotId).second) {
+                    if (++g_depotRefCount[DepotId] == 1)
+                        g_pendingAdditions.push_back(DepotId);
 
-        if (!g_currentFile.empty()) {
-            if (g_fileDepots[g_currentFile].insert(DepotId).second) {
-                if (++g_depotRefCount[DepotId] == 1)
-                    g_pendingAdditions.push_back(DepotId);
-
-                // Update the appId's purchase time with the current file's mtime,
-                // keeping the maximum across every contributing file.
-                auto mtIt = g_fileMtime.find(g_currentFile);
-                if (mtIt != g_fileMtime.end()) {
-                    uint32_t mt = mtIt->second;
-                    auto& slot = g_purchaseTime[DepotId];
-                    if (mt > slot) slot = mt;
+                    // Update the appId's purchase time with the current file's mtime,
+                    // keeping the maximum across every contributing file.
+                    auto mtIt = g_fileMtime.find(g_currentFile);
+                    if (mtIt != g_fileMtime.end()) {
+                        uint32_t mt = mtIt->second;
+                        auto& slot = g_purchaseTime[DepotId];
+                        if (mt > slot) slot = mt;
+                    }
                 }
             }
-        }
+        });
 
         return 0;
     }
@@ -307,8 +381,7 @@ namespace LuaConfig{
             if (!ParseUInt64Decimal(token, &parsedToken)) {
                 return luaL_error(L, "");
             }
-            std::unique_lock lock(g_stateMutex);
-            AccessTokenSet[AppId] = parsedToken;
+            ApplyConfigOp([AppId, parsedToken] { AccessTokenSet[AppId] = parsedToken; });
         }
 
         return 0;
@@ -331,9 +404,7 @@ namespace LuaConfig{
         // Read the second argument as the CD key, stored verbatim.
         if (!lua_isstring(L, 2))
             return luaL_error(L, "");
-        std::string cdKey = lua_tostring(L, 2);
-        std::unique_lock lock(g_stateMutex);
-        LegacyCDKeySet[AppId] = std::move(cdKey);
+        ApplyConfigOp([AppId, cdKey = std::string(lua_tostring(L, 2))] { LegacyCDKeySet[AppId] = cdKey; });
         return 0;
     }
 
@@ -350,8 +421,9 @@ namespace LuaConfig{
         std::string name(lua_tostring(L, 2));
         for (char& ch : name)
             ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
-        std::unique_lock lock(g_stateMutex);
-        ProcessNameAppIdMap[name] = static_cast<AppId_t>(value);
+        ApplyConfigOp([name = std::move(name), value] {
+            ProcessNameAppIdMap[name] = static_cast<AppId_t>(value);
+        });
         return 0;
     }
 
@@ -362,8 +434,7 @@ namespace LuaConfig{
         lua_Integer value = lua_tointeger(L, 1);
         if (value <= 0 || value > static_cast<lua_Integer>(UINT32_MAX))
             return luaL_error(L, "forcedenuvo: appid out of range");
-        std::unique_lock lock(g_stateMutex);
-        ForcedDenuvoSet.insert(static_cast<AppId_t>(value));
+        ApplyConfigOp([value] { ForcedDenuvoSet.insert(static_cast<AppId_t>(value)); });
         return 0;
     }
 
@@ -373,9 +444,7 @@ namespace LuaConfig{
         // strict Denuvo titles. Set to "" (or omit the call) to disable.
         if (lua_gettop(L) < 1 || !lua_isstring(L, 1))
             return luaL_error(L, "seteticketurl requires (url: string)");
-        std::string url(lua_tostring(L, 1));
-        std::unique_lock lock(g_stateMutex);
-        EticketUrl = std::move(url);
+        ApplyConfigOp([url = std::string(lua_tostring(L, 1))] { EticketUrl = url; });
         return 0;
     }
 
@@ -403,14 +472,14 @@ namespace LuaConfig{
         if (!ParseUInt64Decimal(gidStr, &gid))
             return luaL_error(L, "setManifestid: gid must be all digits");
 
-        ManifestOverride override{ gid, 0 };
-        std::unique_lock lock(g_stateMutex);
-        if (!g_currentFile.empty()) {
-            g_fileManifestOverrides[g_currentFile][depotId] = override;
-            RebuildManifestOverride(depotId);
-        } else {
-            SetActiveManifestOverride(depotId, override);
-        }
+        ApplyConfigOp([depotId, override = ManifestOverride{ gid, 0 }] {
+            if (!g_currentFile.empty()) {
+                g_fileManifestOverrides[g_currentFile][depotId] = override;
+                RebuildManifestOverride(depotId);
+            } else {
+                SetActiveManifestOverride(depotId, override);
+            }
+        });
         return 0;
     }
 
@@ -505,13 +574,13 @@ namespace LuaConfig{
         if (!ParseUInt64Decimal(sidStr, &steamId))
             return luaL_error(L, "setStat: steamId must be all digits");
 
-        std::unique_lock lock(g_stateMutex);
-        StatSteamIdSet[appId] = steamId;
+        ApplyConfigOp([appId, steamId] { StatSteamIdSet[appId] = steamId; });
         return 0;
     }
 
     // ── init ─────────────────────────────────────────────────────
     static bool Initialize() {
+        std::scoped_lock lock(g_luaMutex);
         if (g_lua_state)
             return true;
         g_lua_state = luaL_newstate();
@@ -671,49 +740,53 @@ namespace LuaConfig{
     }
 
     bool CallManifestFetchCode(uint64_t gid, uint64_t* outCode) {
-        if (!g_hasManifestCodeFunc || !g_lua_state)
+        // The flag is only ever set after g_lua_state exists.
+        if (!g_hasManifestCodeFunc)
             return false;
 
-        lua_getglobal(g_lua_state, "fetch_manifest_code");
-        lua_pushinteger(g_lua_state, static_cast<lua_Integer>(gid));
+        LuaCall call;
+        lua_State* L = call.get();
 
-        if (lua_pcall(g_lua_state, 1, 1, 0) != LUA_OK) {
+        lua_getglobal(L, "fetch_manifest_code");
+        lua_pushinteger(L, static_cast<lua_Integer>(gid));
+
+        if (lua_pcall(L, 1, 1, 0) != LUA_OK) {
             LOG_MANIFEST_WARN("fetch_manifest_code({}) error: {}", gid,
-                             lua_tostring(g_lua_state, -1));
-            lua_pop(g_lua_state, 1);
+                             lua_tostring(L, -1));
+            lua_pop(L, 1);
             return false;
         }
 
         // nil → fallback to config url (normal, not an error)
-        if (lua_isnil(g_lua_state, -1)) {
+        if (lua_isnil(L, -1)) {
             LOG_MANIFEST_WARN("fetch_manifest_code({}) returned nil", gid);
-            lua_pop(g_lua_state, 1);
+            lua_pop(L, 1);
             return false;
         }
 
         // The function must return a digit string (uint64 as decimal).
         // tonumber() loses precision for values > 2^53; string is safe.
-        if (lua_isinteger(g_lua_state, -1)) {
-            *outCode = static_cast<uint64_t>(lua_tointeger(g_lua_state, -1));
-        } else if (lua_isstring(g_lua_state, -1)) {
-            const char* s = lua_tostring(g_lua_state, -1);
+        if (lua_isinteger(L, -1)) {
+            *outCode = static_cast<uint64_t>(lua_tointeger(L, -1));
+        } else if (lua_isstring(L, -1)) {
+            const char* s = lua_tostring(L, -1);
             uint64_t parsed = 0;
             if (!ParseUInt64Decimal(s, &parsed)) {
                 LOG_MANIFEST_WARN("fetch_manifest_code({}) returned invalid numeric string '{}'",
                                  gid, s);
-                lua_pop(g_lua_state, 1);
+                lua_pop(L, 1);
                 return false;
             }
             *outCode = parsed;
         } else {
             LOG_MANIFEST_WARN("fetch_manifest_code({}) unexpected type (expected digit-string)",
                              gid);
-            lua_pop(g_lua_state, 1);
+            lua_pop(L, 1);
             return false;
         }
 
         LOG_MANIFEST_INFO("fetch_manifest_code({}) = {}", gid, *outCode);
-        lua_pop(g_lua_state, 1);
+        lua_pop(L, 1);
         return true;
     }
 
@@ -722,105 +795,118 @@ namespace LuaConfig{
     }
 
     bool CallManifestFetchCodeEx(uint64_t app_id, uint64_t depot_id, uint64_t gid, uint64_t* outCode) {
-        if (!g_hasManifestCodeFuncEx || !g_lua_state)
+        if (!g_hasManifestCodeFuncEx)
             return false;
 
-        lua_getglobal(g_lua_state, "fetch_manifest_code_ex");
-        lua_pushinteger(g_lua_state, static_cast<lua_Integer>(app_id));
-        lua_pushinteger(g_lua_state, static_cast<lua_Integer>(depot_id));
-        lua_pushinteger(g_lua_state, static_cast<lua_Integer>(gid));
+        LuaCall call;
+        lua_State* L = call.get();
 
-        if (lua_pcall(g_lua_state, 3, 1, 0) != LUA_OK) {
+        lua_getglobal(L, "fetch_manifest_code_ex");
+        lua_pushinteger(L, static_cast<lua_Integer>(app_id));
+        lua_pushinteger(L, static_cast<lua_Integer>(depot_id));
+        lua_pushinteger(L, static_cast<lua_Integer>(gid));
+
+        if (lua_pcall(L, 3, 1, 0) != LUA_OK) {
             LOG_MANIFEST_WARN("fetch_manifest_code_ex({}, {}, {}) error: {}", app_id, depot_id, gid,
-                             lua_tostring(g_lua_state, -1));
-            lua_pop(g_lua_state, 1);
+                             lua_tostring(L, -1));
+            lua_pop(L, 1);
             return false;
         }
 
-        if (lua_isnil(g_lua_state, -1)) {
+        if (lua_isnil(L, -1)) {
             LOG_MANIFEST_WARN("fetch_manifest_code_ex({}, {}, {}) returned nil", app_id, depot_id, gid);
-            lua_pop(g_lua_state, 1);
+            lua_pop(L, 1);
             return false;
         }
 
-        if (lua_isinteger(g_lua_state, -1)) {
-            *outCode = static_cast<uint64_t>(lua_tointeger(g_lua_state, -1));
-        } else if (lua_isstring(g_lua_state, -1)) {
-            const char* s = lua_tostring(g_lua_state, -1);
+        if (lua_isinteger(L, -1)) {
+            *outCode = static_cast<uint64_t>(lua_tointeger(L, -1));
+        } else if (lua_isstring(L, -1)) {
+            const char* s = lua_tostring(L, -1);
             uint64_t parsed = 0;
             if (!ParseUInt64Decimal(s, &parsed)) {
                 LOG_MANIFEST_WARN("fetch_manifest_code_ex({}, {}, {}) returned invalid numeric string '{}'",
                                  app_id, depot_id, gid, s);
-                lua_pop(g_lua_state, 1);
+                lua_pop(L, 1);
                 return false;
             }
             *outCode = parsed;
         } else {
             LOG_MANIFEST_WARN("fetch_manifest_code_ex({}, {}, {}) unexpected type (expected digit-string)",
                              app_id, depot_id, gid);
-            lua_pop(g_lua_state, 1);
+            lua_pop(L, 1);
             return false;
         }
 
         LOG_MANIFEST_INFO("fetch_manifest_code_ex({}, {}, {}) = {}", app_id, depot_id, gid, *outCode);
-        lua_pop(g_lua_state, 1);
+        lua_pop(L, 1);
         return true;
     }
 
     // ── per-file unload ────────────────────────────────────────
-    void UnloadFile(const std::string& filePath) {
-        // The whole mutation runs under one exclusive lock: DepotKeySet /
-        // g_depotRefCount / g_fileDepots must change together or a reader could
-        // see a depot whose bookkeeping is already gone. No Lua, network or
-        // logging in the critical section (a debug-level log is a file write);
-        // the counts are logged once it is released.
-        bool hadDepots = false, hadOverrides = false;
-        [[maybe_unused]] size_t removedDepots = 0, removedOverrides = 0;
-        {
-            std::unique_lock lock(g_stateMutex);
-            auto depotsIt = g_fileDepots.find(filePath);
-            auto manifestIt = g_fileManifestOverrides.find(filePath);
-            if (depotsIt == g_fileDepots.end() && manifestIt == g_fileManifestOverrides.end()) return;
+    struct UnloadStats {
+        size_t depots = 0;
+        size_t overrides = 0;
+    };
 
-            if (depotsIt != g_fileDepots.end()) {
-                for (AppId_t id : depotsIt->second) {
-                    if (--g_depotRefCount[id] == 0) {
-                        g_depotRefCount.erase(id);
-                        DepotKeySet.erase(id);
-                        g_purchaseTime.erase(id);
-                        g_pendingRemovals.push_back(id);
-                    }
+    // Caller holds g_stateMutex exclusively. DepotKeySet / g_depotRefCount /
+    // g_fileDepots must change together or a reader could see a depot whose
+    // bookkeeping is already gone. No Lua, network or logging in here (a
+    // debug-level log is a file write); log the returned counts after unlocking.
+    static UnloadStats UnloadFileLocked(const std::string& filePath) {
+        UnloadStats stats;
+        auto depotsIt = g_fileDepots.find(filePath);
+        auto manifestIt = g_fileManifestOverrides.find(filePath);
+        if (depotsIt == g_fileDepots.end() && manifestIt == g_fileManifestOverrides.end()) return stats;
+
+        if (depotsIt != g_fileDepots.end()) {
+            for (AppId_t id : depotsIt->second) {
+                if (--g_depotRefCount[id] == 0) {
+                    g_depotRefCount.erase(id);
+                    DepotKeySet.erase(id);
+                    g_purchaseTime.erase(id);
+                    g_pendingRemovals.push_back(id);
                 }
-
-                hadDepots = true;
-                removedDepots = depotsIt->second.size();
-                g_fileDepots.erase(depotsIt);
             }
 
-            if (manifestIt != g_fileManifestOverrides.end()) {
-                std::vector<uint64_t> affectedDepots;
-                affectedDepots.reserve(manifestIt->second.size());
-                for (const auto& [depotId, _] : manifestIt->second) {
-                    affectedDepots.push_back(depotId);
-                }
-
-                g_fileManifestOverrides.erase(manifestIt);
-                for (uint64_t depotId : affectedDepots) {
-                    RebuildManifestOverride(depotId);
-                }
-
-                hadOverrides = true;
-                removedOverrides = affectedDepots.size();
-            }
-
-            g_fileParseSequence.erase(filePath);
-            g_fileMtime.erase(filePath);
+            stats.depots = depotsIt->second.size();
+            g_fileDepots.erase(depotsIt);
         }
 
-        if (hadDepots)
-            LOG_PACKAGE_INFO("UnloadFile: removed {} depots from {}", removedDepots, filePath);
-        if (hadOverrides)
-            LOG_MANIFEST_INFO("UnloadFile: removed {} manifest override(s) from {}", removedOverrides, filePath);
+        if (manifestIt != g_fileManifestOverrides.end()) {
+            std::vector<uint64_t> affectedDepots;
+            affectedDepots.reserve(manifestIt->second.size());
+            for (const auto& [depotId, _] : manifestIt->second) {
+                affectedDepots.push_back(depotId);
+            }
+
+            g_fileManifestOverrides.erase(manifestIt);
+            for (uint64_t depotId : affectedDepots) {
+                RebuildManifestOverride(depotId);
+            }
+
+            stats.overrides = affectedDepots.size();
+        }
+
+        g_fileParseSequence.erase(filePath);
+        g_fileMtime.erase(filePath);
+        return stats;
+    }
+
+    static void LogUnload([[maybe_unused]] const std::string& filePath, const UnloadStats& stats) {
+        if (stats.depots)
+            LOG_PACKAGE_INFO("UnloadFile: removed {} depots from {}", stats.depots, filePath);
+        if (stats.overrides)
+            LOG_MANIFEST_INFO("UnloadFile: removed {} manifest override(s) from {}", stats.overrides, filePath);
+    }
+
+    void UnloadFile(const std::string& filePath) {
+        UnloadStats stats;
+        {
+            std::unique_lock lock(g_stateMutex);
+            stats = UnloadFileLocked(filePath);
+        }
+        LogUnload(filePath, stats);
     }
 
     std::vector<AppId_t> TakePendingRemovals() {
@@ -876,17 +962,16 @@ namespace LuaConfig{
     void ParseFile(const std::string& filePath) {
         if (!Initialize()) return;
 
-        // Remove old entries from this file before re-parsing. UnloadFile takes
-        // g_stateMutex itself, so it must be called with the lock released.
-        UnloadFile(filePath);
-
         // filePath is UTF-8 from both callers (CollectLuaFiles' startup scan and
         // LuaFileWatcher's hot-reload -- see the comment there); decode via
         // Utf8ToPath rather than the ANSI-codepage path(std::string) constructor.
         const std::filesystem::path path = OSTPlatform::Encoding::Utf8ToPath(filePath);
         std::ifstream file(path);
         if (!file) {
-            LOG_WARN("ParseFile: failed to open {}", path.filename().string());
+            // Fail-safe: a writer holding the file mid-save must not unload the games
+            // it contributed. A real deletion arrives as a Removed event (UnloadFile).
+            LOG_WARN("ParseFile: failed to open {}, keeping any loaded version",
+                     path.filename().string());
             return;
         }
 
@@ -903,66 +988,102 @@ namespace LuaConfig{
                 mtime = static_cast<uint32_t>(std::chrono::system_clock::to_time_t(sctp));
             }
         }
+
+        // Neither lock is held across HTTP: lua_pcall may block in http_get/http_post
+        // (which release g_luaMutex), and g_stateMutex is not taken until the commit.
+        std::vector<std::function<void()>> stagedOps;
+        bool incomplete = false;
         {
-            std::unique_lock lock(g_stateMutex);
-            g_fileParseSequence[filePath] = ++g_nextFileParseSequence;
-            g_fileMtime[filePath] = mtime;
-            g_currentFile = filePath;
-        }
+            LuaCall call;
+            lua_State* L = call.get();
 
-        // The lock is NOT held while the script runs: lua_pcall may block in
-        // http_get/http_post, and every lua_* callback below locks for its own
-        // mutation only.
-        std::string chunk, line;
-        int lineNo = 0;
-        while (std::getline(file, line)) {
-            ++lineNo;
-            if (!chunk.empty()) chunk += '\n';
-            chunk += line;
+            t_stagedOps = &stagedOps;
+            std::string chunk, line;
+            int lineNo = 0;
+            while (std::getline(file, line)) {
+                ++lineNo;
+                if (!chunk.empty()) chunk += '\n';
+                chunk += line;
 
-            lua_settop(g_lua_state, 0);
-            int rc = luaL_loadstring(g_lua_state, chunk.c_str());
-            if (rc == LUA_OK) {
-                if (lua_pcall(g_lua_state, 0, 0, 0) != LUA_OK) {
-                    [[maybe_unused]] const char* err = lua_tostring(g_lua_state, -1);
-                    LOG_WARN("{}:{}: {}", path.filename().string(), lineNo,
-                             err ? err : "unknown");
+                lua_settop(L, 0);
+                int rc = luaL_loadstring(L, chunk.c_str());
+                if (rc == LUA_OK) {
+                    if (lua_pcall(L, 0, 0, 0) != LUA_OK) {
+                        [[maybe_unused]] const char* err = lua_tostring(L, -1);
+                        LOG_WARN("{}:{}: {}", path.filename().string(), lineNo,
+                                 err ? err : "unknown");
+                    }
+                    chunk.clear();
+                } else if (rc == LUA_ERRSYNTAX) {
+                    lua_pop(L, 1);
+                } else {
+                    [[maybe_unused]] const char* err = lua_tostring(L, -1);
+                    LOG_WARN("{}:{}: {}", path.filename().string(), lineNo, err ? err : "unknown");
+                    lua_pop(L, 1);
+                    chunk.clear();
                 }
-                chunk.clear();
-            } else if (rc == LUA_ERRSYNTAX) {
-                lua_pop(g_lua_state, 1);
-            } else {
-                [[maybe_unused]] const char* err = lua_tostring(g_lua_state, -1);
-                LOG_WARN("{}:{}: {}", path.filename().string(), lineNo, err ? err : "unknown");
-                lua_pop(g_lua_state, 1);
-                chunk.clear();
+            }
+            t_stagedOps = nullptr;
+            lua_settop(L, 0);
+
+            // Zero lines counts: truncating is the first step of a non-atomic save.
+            incomplete = lineNo == 0 || !chunk.empty() || file.bad();
+            if (incomplete) {
+                LOG_WARN("{}: empty, or ends mid-statement", path.filename().string());
+            }
+
+            // Check for manifest code functions after parsing. Each flag is stored
+            // once (not reset to false first) so a concurrent HasManifestCodeFunc*()
+            // never sees a transient false while the function is still defined.
+            lua_getglobal(L, "fetch_manifest_code");
+            const bool hasCodeFunc = lua_isfunction(L, -1);
+            lua_pop(L, 1);
+            g_hasManifestCodeFunc = hasCodeFunc;
+            if (hasCodeFunc) {
+                LOG_INFO("manifest.lua: fetch_manifest_code found");
+            }
+
+            lua_getglobal(L, "fetch_manifest_code_ex");
+            const bool hasCodeFuncEx = lua_isfunction(L, -1);
+            lua_pop(L, 1);
+            g_hasManifestCodeFuncEx = hasCodeFuncEx;
+            if (hasCodeFuncEx) {
+                LOG_INFO("manifest.lua: fetch_manifest_code_ex found");
             }
         }
-        if (!chunk.empty()) {
-            LOG_WARN("{}: incomplete statement at end of file", path.filename().string());
+
+        // Commit: readers see the old file or the new one, nothing in between.
+        // A truncated file (half-saved, or a syntax error that swallowed the rest)
+        // must not replace a loaded version. With nothing loaded yet its complete
+        // statements still apply, and a failing statement never blocks a reload: one
+        // bad line in an otherwise valid file has always been skipped, not fatal.
+        // ponytail: truncation that lands exactly on a statement boundary looks like a
+        // complete file; only an atomic replace by the writer can rule that out. A file
+        // emptied on purpose keeps its old version until deleted or Steam restarts.
+        // Discarding also only covers config state: setAppTicket/setETicket and Lua
+        // globals took effect during the run, and are redone by the next good parse.
+        UnloadStats stats;
+        bool keptPrevious = false;
+        {
+            std::unique_lock lock(g_stateMutex);
+            keptPrevious = incomplete && (g_fileDepots.contains(filePath) ||
+                                          g_fileManifestOverrides.contains(filePath));
+            if (!keptPrevious) {
+                stats = UnloadFileLocked(filePath);
+                g_fileParseSequence[filePath] = ++g_nextFileParseSequence;
+                g_fileMtime[filePath] = mtime;
+                g_currentFile = filePath;
+                for (const auto& op : stagedOps) {
+                    op();
+                }
+                g_currentFile.clear();
+            }
         }
 
-        // Check for manifest code functions after parsing. Each flag is stored
-        // once (not reset to false first) so a concurrent HasManifestCodeFunc*()
-        // never sees a transient false while the function is still defined.
-        lua_getglobal(g_lua_state, "fetch_manifest_code");
-        const bool hasCodeFunc = lua_isfunction(g_lua_state, -1);
-        lua_pop(g_lua_state, 1);
-        g_hasManifestCodeFunc = hasCodeFunc;
-        if (hasCodeFunc) {
-            LOG_INFO("manifest.lua: fetch_manifest_code found");
+        LogUnload(filePath, stats);
+        if (keptPrevious) {
+            LOG_WARN("{}: keeping the previously loaded version", path.filename().string());
         }
-
-        lua_getglobal(g_lua_state, "fetch_manifest_code_ex");
-        const bool hasCodeFuncEx = lua_isfunction(g_lua_state, -1);
-        lua_pop(g_lua_state, 1);
-        g_hasManifestCodeFuncEx = hasCodeFuncEx;
-        if (hasCodeFuncEx) {
-            LOG_INFO("manifest.lua: fetch_manifest_code_ex found");
-        }
-
-        std::unique_lock lock(g_stateMutex);
-        g_currentFile.clear();
     }
 
     // ── directory scanner ────────────────────────────────────────

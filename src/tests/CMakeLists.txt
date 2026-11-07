@@ -113,6 +113,14 @@
 # whether a downloaded copy may replace it) and Tickets/ForgeBaseCache.h (the
 # account-keyed forge base slot + ticket-ownership predicate) are header-only
 # and dependency-free as well.
+#
+# LuaConfig.cpp is the exception to "no Lua": its concurrency contract cannot be
+# tested without the interpreter, so luaconfig_concurrency_test.cpp links the real
+# lua_static (plain C, not the hooking surface the AV note above is about) and fakes
+# Http::Execute, StatsClient and the AppTicket writers at link time.
+#
+# PackageReconcileLogic.h (what NotifyLicenseChanged changes in the injected
+# AppIdVec) is header-only, with the config and the vector passed in as callables.
 # ---------------------------------------------------------------------------
 
 include(GTestDep)   # our recipe: GTest::gtest_main / GTest::gmock (/MT)
@@ -149,6 +157,8 @@ add_executable(AmethystToolTests
     achievements_logic_test.cpp
     rich_presence_logic_test.cpp
     ugc_logic_test.cpp
+    luaconfig_concurrency_test.cpp
+    package_reconcile_logic_test.cpp
 
     # Units under test, compiled directly (no OSTPlatform lib link) — see header.
     "${_ostp}/Numbers.cpp"
@@ -198,17 +208,27 @@ add_executable(AmethystToolTests
     # Binary-KeyValues schema/stats join behind LocalAchievements::Read, split
     # out so it compiles here without dllmain.h, spdlog or any file IO.
     "${CMAKE_CURRENT_SOURCE_DIR}/../Utils/Achievements/LocalAchievementsLogic.cpp"
+    # The real thing, for luaconfig_concurrency_test.cpp -- see header.
+    "${CMAKE_CURRENT_SOURCE_DIR}/../Utils/Config/LuaConfig.cpp"
 )
+
+# LuaConfig.cpp has non-ASCII comments, as AmethystTool compiles it with /utf-8.
+if(MSVC)
+    set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/../Utils/Config/LuaConfig.cpp"
+        PROPERTIES COMPILE_OPTIONS "/utf-8")
+endif()
 
 # src/ root for production-style header spellings ("Utils/Support/FnvHash.h",
 # "OSTPlatform/include/Numbers.h"); OSTPlatform dir for the units' own
 # "include/..." spelling (e.g. Numbers.cpp -> #include "include/Encoding.h");
 # PROTO_GEN_DIR for the generated steam_messages.pb.h LicenseListLogic.cpp and
-# the test both include.
+# the test both include; generated/ for the ost_log_macros.h that LuaConfig.cpp
+# reaches through dllmain.h -> Log.h.
 target_include_directories(AmethystToolTests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/..
     ${_ostp}
     "${PROTO_GEN_DIR}"
+    "${CMAKE_BINARY_DIR}/generated"
 )
 
 # Both license_list_logic_test.cpp and this build's copy of LicenseListLogic.cpp
@@ -226,6 +246,7 @@ target_link_libraries(AmethystToolTests PRIVATE
     GTest::gtest_main
     GTest::gmock
     Bcrypt
+    lua_static
     tomlplusplus::tomlplusplus
     $<$<CONFIG:Debug>:libprotobuf>
     $<$<CONFIG:Release>:libprotobuf-lite>

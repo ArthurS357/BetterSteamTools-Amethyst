@@ -34,9 +34,9 @@ endif()
 set(_OST_ALL_CACHED TRUE)
 foreach(_dep IN ITEMS lua detours spdlog protobuf tomlplusplus googletest)
     string(TOUPPER "${_dep}" _UPPER)
-    set(_src "${OST_DEPS_DIR}/${_dep}-src")
-    if(IS_DIRECTORY "${_src}")
-        set(FETCHCONTENT_SOURCE_DIR_${_UPPER} "${_src}" CACHE PATH
+    set(_dep_src "${OST_DEPS_DIR}/${_dep}-src")
+    if(IS_DIRECTORY "${_dep_src}")
+        set(FETCHCONTENT_SOURCE_DIR_${_UPPER} "${_dep_src}" CACHE PATH
             "Pre-populated ${_dep} source dir" FORCE)
     else()
         set(_OST_ALL_CACHED FALSE)

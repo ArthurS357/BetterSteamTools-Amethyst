@@ -56,3 +56,37 @@ jobs:
           path: linux-logic-tests.xml
           if-no-files-found: ignore
           retention-days: 7
+
+  # The real LuaConfig.cpp + real Lua under a race detector. Windows CI cannot do
+  # this: MSVC has no ThreadSanitizer. See src/tests/linux/luaconfig/CMakeLists.txt.
+  luaconfig-concurrency:
+    name: LuaConfig concurrency (ubuntu, ${{ matrix.sanitizer }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        sanitizer: ['thread', 'address,undefined']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends g++ cmake ninja-build libgtest-dev
+
+      # Sanitizer shadow memory breaks under the runner's default high mmap ASLR.
+      - name: Lower mmap randomisation
+        run: sudo sysctl -w vm.mmap_rnd_bits=28
+
+      - name: Configure
+        run: >
+          cmake -S src/tests/linux/luaconfig -B build-luaconfig -G Ninja
+          -DCMAKE_BUILD_TYPE=Debug "-DLUACONFIG_SANITIZE=${{ matrix.sanitizer }}"
+
+      - name: Build
+        run: cmake --build build-luaconfig
+
+      - name: Run tests
+        run: ./build-luaconfig/LuaConfigConcurrencyTests --gtest_color=yes
