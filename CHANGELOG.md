@@ -1,5 +1,24 @@
 # Changelog
 
+## [v1.5.0] - Unreleased
+
+Independence and stability. Scope and rationale: [docs/ROADMAP-v1.5.0.md](docs/ROADMAP-v1.5.0.md).
+
+### Added
+- **Embedded IPC spec.** The 6 IPC methods in use (`IClientUser` x4, `IClientUtils` x2) are compiled in (`Utils/SteamMetadata/IPCEmbedded.h`). `IPCLoader::Load` now tries the cache by SHA, then the embedded table, then the mirrors. The table is used only if all 12 `funcHash`/`fencepost` constants are found in the loaded `steamclient64.dll` `.text`; otherwise it falls through to the mirrors as before. A Steam update no longer triggers an IPC request when the table verifies.
+- **Manifest provider failover (`[manifest] failover`, on by default).** If the configured provider fails, the request code is fetched from the next one (`wudrm` then `steamrun`) within a ~10 s total budget. A provider that times out or answers 5xx is skipped for 5 minutes. A `url_template` override is never swapped for a built-in provider. `failover = false` restores the single-provider behaviour.
+
+### Changed
+- `ManifestClient` no longer holds its mutex while it waits on the network or on a Lua `fetch_manifest_code*` call, so concurrent depot requests no longer queue behind each other.
+- `RemoteToml::Fetch` is split into `LoadCached` (hash plus cache read, no network) and `FetchOnMiss` (mirror walk). Behaviour is unchanged.
+
+### Privacy
+- With failover on, a manifest `gid` (and depot id for depot-aware providers) is sent to the next provider when the first one fails. Nothing extra is sent while the first provider answers. Set `failover = false` to opt out.
+
+### Planned for this release (not implemented yet)
+- **Pin current version:** write `setManifestid` lines from the installed `appmanifest` data.
+- **Shadow fingerprint recorder** and the offline `pattern_migrate` tool. Runtime migration is deferred to v1.5.1.
+
 ## [v1.4.0] - 2026-11-06
 
 ### Added
