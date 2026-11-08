@@ -66,4 +66,35 @@ bool IsReadable(const void* addr, size_t bytes) {
     return true;
 }
 
+std::optional<ModuleImage> GetModuleSection(DynamicLibrary::ModuleHandle module, std::string_view name) {
+    if (!module || name.empty() || name.size() > IMAGE_SIZEOF_SHORT_NAME) return std::nullopt;
+
+    auto* const base = static_cast<uint8_t*>(module);
+    if (!IsReadable(base, sizeof(IMAGE_DOS_HEADER))) return std::nullopt;
+    const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
+    if (dos->e_magic != IMAGE_DOS_SIGNATURE || dos->e_lfanew <= 0) return std::nullopt;
+
+    const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(base + dos->e_lfanew);
+    if (!IsReadable(nt, sizeof(IMAGE_NT_HEADERS)) || nt->Signature != IMAGE_NT_SIGNATURE) return std::nullopt;
+
+    const IMAGE_SECTION_HEADER* sections = IMAGE_FIRST_SECTION(nt);
+    const size_t count = nt->FileHeader.NumberOfSections;
+    if (!IsReadable(sections, count * sizeof(IMAGE_SECTION_HEADER))) return std::nullopt;
+
+    const size_t imageSize = nt->OptionalHeader.SizeOfImage;
+    for (size_t i = 0; i < count; ++i) {
+        const IMAGE_SECTION_HEADER& s = sections[i];
+        // The 8-byte name is not NUL-terminated when it is exactly 8 characters.
+        const std::string_view padded(reinterpret_cast<const char*>(s.Name), IMAGE_SIZEOF_SHORT_NAME);
+        if (padded.substr(0, padded.find('\0')) != name) continue;
+
+        const size_t offset = s.VirtualAddress;
+        const size_t size = s.Misc.VirtualSize ? s.Misc.VirtualSize : s.SizeOfRawData;
+        if (size == 0 || offset > imageSize || size > imageSize - offset) return std::nullopt;
+        if (!IsReadable(base + offset, size)) return std::nullopt;
+        return ModuleImage{ base + offset, size };
+    }
+    return std::nullopt;
+}
+
 } // namespace OSTPlatform::Memory

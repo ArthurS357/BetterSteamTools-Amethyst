@@ -159,6 +159,8 @@ add_executable(AmethystToolTests
     ugc_logic_test.cpp
     luaconfig_concurrency_test.cpp
     package_reconcile_logic_test.cpp
+    ipc_embedded_test.cpp
+    module_section_test.cpp
 
     # Units under test, compiled directly (no OSTPlatform lib link) — see header.
     "${_ostp}/Numbers.cpp"
@@ -229,6 +231,12 @@ target_include_directories(AmethystToolTests PRIVATE
     ${_ostp}
     "${PROTO_GEN_DIR}"
     "${CMAKE_BINARY_DIR}/generated"
+)
+
+# ipc_embedded_test.cpp reads Hook/Hooks_IPC_ISteam*.cpp and Steam/IPCMessages.steamd to
+# keep IPCEmbedded::kEntries in step with the registered handlers and the IDL.
+target_compile_definitions(AmethystToolTests PRIVATE
+    AMETHYST_SRC_DIR="${CMAKE_CURRENT_SOURCE_DIR}/.."
 )
 
 # Both license_list_logic_test.cpp and this build's copy of LicenseListLogic.cpp

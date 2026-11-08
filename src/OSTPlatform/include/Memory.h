@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <string_view>
 
 namespace OSTPlatform::Memory {
 
@@ -32,5 +33,15 @@ namespace OSTPlatform::Memory {
     // Lives in Windows/MemoryQuery.cpp, not Memory.cpp, so the unit-test binary
     // can compile it without WriteExecutableByte's RWX patching path.
     bool IsReadable(const void* addr, size_t bytes);
+
+    // The in-memory range of one PE section of a loaded module (e.g. ".text"),
+    // from the section table in its headers. nullopt when the module is null, the
+    // headers are not a readable PE image, the section does not exist, or its
+    // range falls outside the image or is not readable -- all ordinary answers.
+    // `name` is at most 8 characters (IMAGE_SIZEOF_SHORT_NAME).
+    //
+    // Same TU as IsReadable (Windows/MemoryQuery.cpp) and for the same reason: the
+    // unit-test binary can compile it, and test it against its own image.
+    std::optional<ModuleImage> GetModuleSection(DynamicLibrary::ModuleHandle module, std::string_view name);
 
 } // namespace OSTPlatform::Memory
