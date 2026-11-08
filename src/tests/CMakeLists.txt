@@ -87,6 +87,10 @@
 # Memory.cpp so this binary does not pick up WriteExecutableByte's RWX
 # patching path (see the AV-heuristic note above).
 #
+# ManifestFailoverLogic.h (the provider chain, ~10 s budget and 5-minute circuit
+# breaker behind ManifestClient's failover, v1.5.0) is header-only: the clock and
+# the per-provider fetch are injected, so the test fakes both -- no network, no sleep.
+#
 # ManifestHookLogic.h (the decision predicates behind the hooks in
 # Hooks_Manifest.cpp, split out the same way) is header-only and constexpr --
 # <cstdint> only, so it needs no source file registered below.
@@ -161,6 +165,7 @@ add_executable(AmethystToolTests
     package_reconcile_logic_test.cpp
     ipc_embedded_test.cpp
     module_section_test.cpp
+    manifest_failover_logic_test.cpp
 
     # Units under test, compiled directly (no OSTPlatform lib link) — see header.
     "${_ostp}/Numbers.cpp"
