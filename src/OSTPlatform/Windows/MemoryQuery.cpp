@@ -76,6 +76,10 @@ std::optional<ModuleImage> GetModuleSection(DynamicLibrary::ModuleHandle module,
 
     const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(base + dos->e_lfanew);
     if (!IsReadable(nt, sizeof(IMAGE_NT_HEADERS)) || nt->Signature != IMAGE_NT_SIGNATURE) return std::nullopt;
+    // IMAGE_NT_HEADERS is the layout of THIS build's architecture (x64 PE32+). The
+    // section table's position depends on SizeOfOptionalHeader, but SizeOfImage is read
+    // from the optional header below, so refuse an image that is not that layout.
+    if (nt->OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR_MAGIC) return std::nullopt;
 
     const IMAGE_SECTION_HEADER* sections = IMAGE_FIRST_SECTION(nt);
     const size_t count = nt->FileHeader.NumberOfSections;
