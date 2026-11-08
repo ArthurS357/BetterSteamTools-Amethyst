@@ -57,6 +57,8 @@ set(LOGIC_TESTS
     # new in v1.4.0 (-Werror, see below)
     ugc_logic_test.cpp
     package_reconcile_logic_test.cpp
+    # new in v1.5.0 (header-only logic + CompatAliasLogic.cpp's temp-and-rename, below)
+    version_pin_logic_test.cpp
     # header-only logic
     pattern_refresh_logic_test.cpp
     pattern_loader_logic_test.cpp

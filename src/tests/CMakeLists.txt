@@ -91,6 +91,10 @@
 # breaker behind ManifestClient's failover, v1.5.0) is header-only: the clock and
 # the per-provider fetch are injected, so the test fakes both -- no network, no sleep.
 #
+# VersionPinLogic.h (the appmanifest reader and pin writer behind tools/version_pin,
+# v1.5.0) is header-only too. Its one write path reuses CompatAliasLogic's temp-and-
+# rename, which is compiled below, so the test also covers the on-disk behaviour.
+#
 # ManifestHookLogic.h (the decision predicates behind the hooks in
 # Hooks_Manifest.cpp, split out the same way) is header-only and constexpr --
 # <cstdint> only, so it needs no source file registered below.
@@ -166,6 +170,7 @@ add_executable(AmethystToolTests
     ipc_embedded_test.cpp
     module_section_test.cpp
     manifest_failover_logic_test.cpp
+    version_pin_logic_test.cpp
 
     # Units under test, compiled directly (no OSTPlatform lib link) — see header.
     "${_ostp}/Numbers.cpp"
