@@ -20,7 +20,18 @@ namespace RemoteToml {
     };
 
     // Read from local cache first; fetch remote only if missing.
+    // Equivalent to LoadCached followed, on a miss, by FetchOnMiss.
     Result Fetch(const Request& request);
+
+    // Hashes the DLL and returns the cached body for that exact SHA-256. Never
+    // touches the network. A miss returns ok = false with sha256 set (empty when
+    // the DLL could not be hashed), so the caller can try another source before
+    // calling FetchOnMiss.
+    Result LoadCached(const Request& request);
+
+    // The mirror walk for a cache miss on `sha256`: writes the cache on success,
+    // falls back to a readable cached copy if every mirror fails.
+    Result FetchOnMiss(const Request& request, const std::string& sha256);
 
     // <Steam>\amethysttool\<channel>\<component>\<sha256>.toml for this request.
     std::filesystem::path CachePathFor(const Request& request, const std::string& sha256);

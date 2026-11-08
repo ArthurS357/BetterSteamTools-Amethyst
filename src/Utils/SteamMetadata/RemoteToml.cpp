@@ -50,7 +50,7 @@ namespace {
     }
 } // namespace
 
-Result Fetch(const Request& request)
+Result LoadCached(const Request& request)
 {
     namespace fs = std::filesystem;
     Result out;
@@ -72,18 +72,10 @@ Result Fetch(const Request& request)
     // 2. Cache path & dir. request.dllPath is UTF-8 (SteamUIPath/SteamclientPath, built
     // from OSTPlatform::DynamicLibrary::GetCurrentDirectoryPath() in dllmain.cpp), so it
     // goes through Utf8ToPath rather than the ANSI-codepage path(std::string) constructor.
-    fs::path cachePath = CachePathFor(request, out.sha256);
-    fs::path cacheDir  = cachePath.parent_path();
-    // Log-only text -- the actual I/O below (fs::exists/ifstream/ofstream) uses the
-    // cachePath/cacheDir fs::path objects directly, so this narrowing never touches disk.
+    const fs::path cachePath = CachePathFor(request, out.sha256);
+    // Log-only text -- the actual I/O below (fs::exists/ifstream) uses the cachePath
+    // fs::path object directly, so this narrowing never touches disk.
     const std::string cachePathText = OSTPlatform::Encoding::PathToUtf8(cachePath);
-
-    std::error_code mkdirEc;
-    fs::create_directories(cacheDir, mkdirEc);
-    if (mkdirEc) {
-        LOG_WARN("RemoteToml({}/{}): could not create cache dir {} ({})",
-                 request.channel, request.component, OSTPlatform::Encoding::PathToUtf8(cacheDir), mkdirEc.message());
-    }
 
     // 3. Cache-first (Amethyst fork): a pattern/IPC TOML is keyed by the DLL's exact
     // SHA-256, so a cached entry for this hash is authoritative and never goes stale
@@ -109,6 +101,28 @@ Result Fetch(const Request& request)
             LOG_WARN("RemoteToml({}/{}): cache file empty, will try remote: {}",
                      request.channel, request.component, cachePathText);
         }
+    }
+
+    // Miss: ok = false, sha256 set. Whether to walk the mirrors is the caller's call
+    // (Fetch does; IPCLoader tries its embedded table first).
+    return out;
+}
+
+Result FetchOnMiss(const Request& request, const std::string& sha256)
+{
+    namespace fs = std::filesystem;
+    Result out;
+    out.sha256 = sha256;
+
+    const fs::path cachePath = CachePathFor(request, sha256);
+    const fs::path cacheDir  = cachePath.parent_path();
+    const std::string cachePathText = OSTPlatform::Encoding::PathToUtf8(cachePath);
+
+    std::error_code mkdirEc;
+    fs::create_directories(cacheDir, mkdirEc);
+    if (mkdirEc) {
+        LOG_WARN("RemoteToml({}/{}): could not create cache dir {} ({})",
+                 request.channel, request.component, OSTPlatform::Encoding::PathToUtf8(cacheDir), mkdirEc.message());
     }
 
     // 4. Cache miss — try remote (mirror chain; order in RemoteTomlLogic).
@@ -193,6 +207,13 @@ Result Fetch(const Request& request)
              request.channel, request.component,
              lastUrl.empty() ? "<none>" : lastUrl, http.status);
     return out;
+}
+
+Result Fetch(const Request& request)
+{
+    Result out = LoadCached(request);
+    if (out.ok || out.sha256.empty()) return out;   // hit, or the DLL could not be hashed
+    return FetchOnMiss(request, out.sha256);
 }
 
 std::filesystem::path CachePathFor(const Request& request, const std::string& sha256)
