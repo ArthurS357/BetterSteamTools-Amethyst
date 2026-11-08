@@ -6,14 +6,20 @@ Independence and stability. Scope and rationale: [docs/ROADMAP-v1.5.0.md](docs/R
 
 ### Added
 - **Embedded IPC spec.** The 6 IPC methods in use (`IClientUser` x4, `IClientUtils` x2) are compiled in (`Utils/SteamMetadata/IPCEmbedded.h`). `IPCLoader::Load` now tries the cache by SHA, then the embedded table, then the mirrors. The table is used only if all 12 `funcHash`/`fencepost` constants are found in the loaded `steamclient64.dll` `.text`; otherwise it falls through to the mirrors as before. A Steam update no longer triggers an IPC request when the table verifies.
-- **Manifest provider failover (`[manifest] failover`, on by default).** If the configured provider fails, the request code is fetched from the next one (`wudrm` then `steamrun`) within a ~10 s total budget. A provider that times out or answers 5xx is skipped for 5 minutes. A `url_template` override is never swapped for a built-in provider. `failover = false` restores the single-provider behaviour.
+- **Manifest provider failover (`[manifest] failover`, on by default).** If the configured provider fails, the request code is fetched from the next one (`wudrm` then `steamrun`) within a ~10 s total budget (best effort; Steam's 12 s wait is the hard stop). A provider that gives no answer or answers 5xx is skipped for 5 minutes; a 404, a 429 or an unreadable answer only moves on to the next provider. A code of 0 is not an answer. A `url_template` override is never swapped for a built-in provider. `failover = false` restores the single-provider behaviour.
 
 ### Changed
 - `ManifestClient` no longer holds its mutex while it waits on the network or on a Lua `fetch_manifest_code*` call, so concurrent depot requests no longer queue behind each other.
 - `RemoteToml::Fetch` is split into `LoadCached` (hash plus cache read, no network) and `FetchOnMiss` (mirror walk). Behaviour is unchanged.
+- `IPCLoader::Load` takes the loaded steamclient module as a second argument (for the `.text` check). New `OSTPlatform::Memory::GetModuleSection` reads a PE section range from a loaded module.
+- A cached IPC TOML that does not parse, or lists no interface, now falls through to the embedded table and the mirrors instead of ending in the "IPC spec missing" popup.
 
 ### Privacy
 - With failover on, a manifest `gid` (and depot id for depot-aware providers) is sent to the next provider when the first one fails. Nothing extra is sent while the first provider answers. Set `failover = false` to opt out.
+- The embedded IPC table removes the IPC spec request (which carries the `steamclient64.dll` hash) on a Steam update, whenever the table verifies.
+
+### Tests
+- 384 to 457. New: `ipc_embedded_test` (verification on synthetic buffers; the table must match the registered handlers and the IDL), `module_section_test` (PE section lookup against the test binary and kernel32, plus forged-header cases on a synthetic image next to an unreadable page), `manifest_failover_logic_test` (chain, budget, timeout capping, retry rule, circuit breaker and the whole walk with a fake clock and fake providers). Windows suite only: not yet added to the Linux logic-test job, which could not be run locally.
 
 ### Planned for this release (not implemented yet)
 - **Pin current version:** write `setManifestid` lines from the installed `appmanifest` data.

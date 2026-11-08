@@ -24,7 +24,7 @@ prepares the data needed to migrate patterns safely in v1.5.1.
 
 ## Pillars
 
-### 1. Embedded IPC spec (in progress)
+### 1. Embedded IPC spec (implemented)
 
 - `Utils/SteamMetadata/IPCEmbedded.h`: a `constexpr` table of the 6 methods in use (`funcHash`, `fencepost`, `argc`).
 - Load order in `IPCLoader::Load`: cache by SHA, then the embedded table, then the mirror chain, then the popup.
@@ -35,13 +35,16 @@ prepares the data needed to migrate patterns safely in v1.5.1.
 - Limits: it covers the 6 methods only. A new handler needs a new table row, and a unit test fails if a functional
   handler has no row.
 
-### 2. Manifest failover (in progress)
+### 2. Manifest failover (implemented)
 
 - Sequential chain: the configured provider first, then the remaining defaults in the order `wudrm`, `steamrun`.
   A `[manifest] url_template` override is never swapped for a built-in provider.
 - Total budget of about 10 s, below the 12 s Steam's receive path waits (`Hooks_NetPacket.cpp`, `kMaxWaitSeconds`).
-  Each attempt gets its share of what is left, and WinHTTP phase timeouts are scaled to fit.
-- Circuit breaker: a transport failure or an HTTP 5xx puts that provider in quarantine for 5 minutes. A 4xx or an
+  Each attempt gets its share of what is left, and no WinHTTP phase may wait longer than that share. The limit is best
+  effort (WinHTTP applies timeouts per phase and per read); Steam's 12 s wait is the hard stop. Shrinking the phases in
+  proportion was tried first and rejected in review: it cut a 5 s connect to under 1 s, less than one lost SYN costs.
+- Circuit breaker: a transport failure or an HTTP 5xx puts that provider in quarantine for 5 minutes. A 429 is not
+  counted, because several depots ask at once and the burst may be ours. A 4xx or an
   unparsable body falls through to the next provider without quarantine (the provider is up, it just lacks the code).
   When every provider is quarantined all of them are tried anyway.
 - `ManifestClient` no longer holds its mutex across the network or Lua call, so concurrent depot requests stop serializing.
