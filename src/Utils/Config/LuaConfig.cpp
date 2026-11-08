@@ -31,9 +31,11 @@ extern "C" {
 namespace LuaConfig{
     // ── Concurrency contract ─────────────────────────────────────
     // Lock order, acquire left to right and never the reverse:
-    //   ManifestClient::g_mutex -> g_luaMutex -> g_stateMutex
+    //   g_luaMutex -> g_stateMutex
     //   Hooks_Package's g_appIdVecMutex -> g_stateMutex
     // g_luaMutex and g_appIdVecMutex never nest with each other.
+    // ManifestClient's g_mutex used to sit before g_luaMutex; since v1.5.0 it is held
+    // only to copy settings and is never held across a Lua call, so it is not in the order.
     //
     // g_stateMutex: everything below is mutated at runtime (Lua config hot-reload
     // on the LuaFileWatcher / ConfigFileWatcher threads, MarkOwned from the

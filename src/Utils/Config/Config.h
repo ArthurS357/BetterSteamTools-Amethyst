@@ -74,7 +74,7 @@ namespace Config {
     bool GetUpdateEnabled();
     bool GetCompatDenuvoAliases();
 
-    // [manifest] — provider selection lives in ManifestClient (table-driven).
+    // [manifest] — provider selection and `failover` live in ManifestClient (table-driven).
     inline uint32_t manifestTimeoutResolve = 5000;
     inline uint32_t manifestTimeoutConnect = 5000;
     inline uint32_t manifestTimeoutSend    = 10000;

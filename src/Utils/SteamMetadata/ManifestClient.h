@@ -7,7 +7,9 @@
 //  Provider table is internal (see kProviders in ManifestClient.cpp);
 //  adding a new provider only requires one row there.
 //
-//  Thread-safe — serialises access to the underlying WinHTTP connection.
+//  Thread-safe. Its state is guarded by a mutex that is never held across a
+//  network or Lua call, so concurrent depot requests do not queue behind each
+//  other (v1.5.0). Provider failover policy: ManifestFailoverLogic.h.
 // ─────────────────────────────────────────────────────────────────
 namespace ManifestClient {
 
@@ -38,9 +40,16 @@ namespace ManifestClient {
     // a custom endpoint cannot reuse the "steamrun" JSON parser.
     bool SetUrlTemplateOverride(std::string_view urlTemplate);
 
+    // [manifest] failover (on by default). When on and no url_template override is
+    // set, a provider that fails is followed by the next one (wudrm, steamrun), within
+    // a ~10 s total budget; a provider that is down is skipped for 5 minutes. Off
+    // restores the single-provider behaviour. Applies from the next request.
+    void SetFailoverEnabled(bool enabled);
+
     // Resolve a manifest GID to its request code. Tries Lua first
     // (fetch_manifest_code_ex, then fetch_manifest_code), then the
-    // active provider. Returns true and sets *outRequestCode on success.
+    // provider chain (the active provider, then its failover successors).
+    // Returns true and sets *outRequestCode on success.
     bool FetchManifestRequestCode(uint64_t manifestGid, uint64_t* outRequestCode,
                                   AppId_t appId = 0, AppId_t depotId = 0);
 

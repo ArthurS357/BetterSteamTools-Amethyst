@@ -164,6 +164,9 @@ url = "wudrm"
 # Optional: bypass the providers above entirely with your own endpoint.
 # Must contain "{gid}". See "Manifest via a custom endpoint" below.
 # url_template = "https://your-host/manifest/{gid}"
+# If the provider above fails, try the next one (wudrm, then steamrun). Default: true.
+# See "Provider failover" below, including what it sends.
+failover = true
 
 # HTTP timeouts for manifest requests (milliseconds)
 timeout_resolve_ms = 5000
@@ -257,6 +260,16 @@ powershell -ExecutionPolicy Bypass -File .\enable-denuvo-compat.ps1 -Remove
 **v1.3.0 changed the default `[manifest] url` from `opensteamtool` to `wudrm`.** `manifest.opensteamtool.com` stopped serving manifests for games the signed-in account does not own — the same phenomenon that motivated Valve's own MRC (manifest request code) system. The symptom was a game showing up in the library normally, then its download failing with a connection error, even though nothing about the tool itself had changed.
 
 If your `amethysttool.toml` still has `url = "opensteamtool"` from before v1.3.0, switch it to `"wudrm"` (the new default) or `"steamrun"`. `opensteamtool` is kept as a selectable provider — it still works for content it does serve — but is no longer recommended as a default. If none of the three built-in providers work for your setup, see [Manifest via a custom endpoint](#manifest-via-a-custom-endpoint).
+
+### Provider failover
+
+**Since v1.5.0, `[manifest] failover` (default `true`) lets a second provider take over when the first one fails.** The provider you select with `url` always goes first; the others follow in the order `wudrm`, then `steamrun`. `opensteamtool` is never added on its own.
+
+- **When it moves on:** the provider gave no answer or a 5xx (it is down), or it answered 404, 429 or something that is not a request code (it lacks that code right now).
+- **Time limit:** the whole chain shares about 10 seconds, below the 12 seconds Steam waits for the code. A provider that fails quickly hands its unused time to the next one, and no `timeout_*_ms` phase waits longer than a provider's share. It is a best-effort limit: Steam's own 12 second wait is the hard stop.
+- **Skipping a dead provider:** one that gave no answer or a 5xx is skipped for 5 minutes, so later downloads do not each wait for its timeout. A 429 is not counted: several depots ask at once, so the burst may be ours. If every provider is in that state, all of them are tried anyway.
+- **What it does not touch:** `manifest.lua` functions and `url_template` keep their priority, and your own endpoint is never replaced by a built-in provider.
+- **What it sends:** when the first provider fails, the manifest `gid` (and the depot id, for providers that accept it) is sent to the next provider too. Nothing extra goes out while the first one answers. `wudrm` is `http://`, so its requests are not encrypted. Set `failover = false` to keep exactly one provider, as before v1.5.0.
 
 ### Manifest via Lua
 
