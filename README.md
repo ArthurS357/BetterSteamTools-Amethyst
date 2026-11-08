@@ -56,7 +56,7 @@ AmethystTool is a privacy-hardened fork of OpenSteamTools. Behavioural differenc
 - Support auto load depot decryption keys from Lua config.
 - Support auto manifest download via `wudrm` / `steamrun` / `opensteamtool` upstream APIs (default is `wudrm` as of v1.3.0 — see [Provider defaults](#provider-defaults)), a custom Lua endpoint (see [Manifest via Lua](#manifest-via-lua)), or a custom URL template (see [Manifest via a custom endpoint](#manifest-via-a-custom-endpoint)).
 - Support downloading protected games or DLCs that require an access token.
-- Support binding manifest to prevent specific games from being updated.
+- Support binding manifest to prevent specific games from being updated (the `version_pin` tool writes it for you, see [Pinning the installed version](#pinning-the-installed-version-with-version_pin)).
 
 ### Hot Reload
 - Adding, modifying, deleting, or overwriting `.lua` files in any watched directory automatically triggers a reload. No restart, no offline/online toggle needed.
@@ -106,6 +106,26 @@ The `extract_tickets` tool dumps the `AppTicket` and `ETicket` hex strings you n
 
 > **Note:** Tickets are only valid when extracted from an account that **genuinely owns** the game.
 
+#### Pinning the installed version with `version_pin`
+
+`version_pin` freezes a game at the version installed right now, so a Steam update (or a regenerated Lua file) cannot change it. It reads `steamapps\appmanifest_<appid>.acf`, takes the manifest of every installed depot and writes `<appid>.pin.lua` with one `setManifestid` call per depot. It is offline: no network, no hook, nothing injected into Steam.
+
+1. Build the tools (see [Build](#build)); the binary lands in `build/tools/Release/version_pin.exe`.
+2. Run it:
+   ```powershell
+   version_pin.exe --appid 3357650     # one game
+   version_pin.exe --all               # every installed game (never the default: freezing all of them must be asked for)
+   version_pin.exe --dry-run           # print what would be written, change nothing
+   ```
+   The Steam folder comes from the registry. `--steam-dir <dir>` overrides it, `--steamapps <dir>` reads a library on another drive, `--out-dir <dir>` changes where the `.pin.lua` goes (default `<Steam>\config\stplug-in`).
+3. Restart Steam, or let the Lua hot reload pick the file up.
+
+- **Nothing is overwritten by surprise, and nothing is half pinned.** A manifest with an unusable `InstalledDepots` entry is refused, because the skipped depot would keep following Steam's updates. An existing `<appid>.pin.lua` is left alone unless you pass `--force`; one this tool wrote and that is already correct is reported as up to date. Exit code `2` means a game failed or was refused.
+- **Check the conflict warnings.** Lua files made by tools such as Luie usually already call `setManifestid` for every depot, with the manifest of the day they were generated. When another `.lua` pins the same depot to a different manifest, `version_pin` says so, and **the file the engine parsed last wins**. Edit or delete the other line to settle it.
+- **Undo it** by deleting the `.pin.lua`; Steam then follows its own updates again.
+- **No size is written.** The engine always forces it to 0.
+- **The pinned manifest must still be obtainable.** One already in `<Steam>\depotcache` needs no request code; any other needs one from a provider (see [Provider failover](#provider-failover)).
+
 ### Stats and Achievements
 - Enable stats and achievements for unowned games.
 - Uses `setStat(appid, "steamid")` to configure which SteamID's achievement data to pull.
@@ -130,8 +150,8 @@ addappid(1361511, 0,"5954562e7f5260400040a818bc29b60b335bb690066ff767e20d145a3b6
 
 addtoken(1361510,"2764735786934684318") -- add access token ("2764735786934684318") for game with appid 1361510 
 
-setManifestid(1361511,"5656605350306673283") -- pin depotid:1361511 manifest_gid:5656605350306673283, size defaults to 0
-setManifestid(1361511,"5656605350306673283", 12345678) -- same but with explicit size
+setManifestid(1361511,"5656605350306673283") -- pin depotid:1361511 manifest_gid:5656605350306673283 (tools/version_pin writes these from what is installed)
+setManifestid(1361511,"5656605350306673283", 12345678) -- a third argument is accepted but ignored: the engine always uses size 0
 
 setAppTicket(1361510,"0100000000000000...") -- write AppTicket to the credential store; on Windows: HKCU\Software\Valve\Steam\Apps\1361510\AppTicket
 

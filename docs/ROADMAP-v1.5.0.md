@@ -51,13 +51,21 @@ prepares the data needed to migrate patterns safely in v1.5.1.
 - Privacy: on failure the manifest `gid` is also sent to the next provider. That is documented in the README.
 - Not changed: `wudrm` is still `http://` and gid-only. Its behaviour after 2026-09-09 should be measured before the default order is revisited.
 
-### 3. Pin current version (B'), not started
+### 3. Pin current version (B') (implemented as the offline tool `tools/version_pin`)
 
-- Reads `InstalledDepots` from `steamapps\appmanifest_<appid>.acf` and writes `setManifestid(depot, gid, size)` lines
-  into a `.lua` file under `config\stplug-in`. No new hook, no IPC change.
+- Reads `InstalledDepots` from `steamapps\appmanifest_<appid>.acf` and writes `<appid>.pin.lua` with one
+  `setManifestid(depot, "gid")` per depot into `config\stplug-in`. No new hook, no IPC change, no network, not in the DLL.
+  Logic in `Utils/SteamMetadata/VersionPinLogic.h`, CLI in `tools/version_pin/`.
+- No size is written: the engine forces it to 0 (`lua_setManifestid`), and the README that said otherwise was corrected.
+- Real Lua files (the Luie ones) already call `setManifestid` per depot with the manifest of the day they were made. The tool
+  therefore checks the other `.lua` files and warns about a different pin for the same depot; the engine lets the file parsed
+  last win, so the tool does not guess. On the audit machine the three Lua-added games already pinned exactly the installed
+  gids (no conflict); only a shared redistributable depot conflicted.
 - Pinning to the installed gid needs no request code when `depotcache\<depot>_<gid>.manifest` is on disk (seen for the
   installed depots of one app on the audit machine).
-- Open question to settle on a real game: whether Steam shows an update as pending because the `buildid` differs.
+- Still open, needs a real game: whether Steam shows an update as pending because the `buildid` differs. The tool was
+  exercised against real manifests and the real `LuaConfig` parses its output, but it was not run against a Steam that
+  has an update waiting.
 
 ### 4. Shadow migration, not started
 
