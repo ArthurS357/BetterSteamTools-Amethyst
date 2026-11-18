@@ -63,6 +63,7 @@ set(LOGIC_TESTS
     pattern_refresh_logic_test.cpp
     pattern_loader_logic_test.cpp
     pattern_migrate_logic_test.cpp     # v1.5.0 pillar 4: header-only engine
+    pattern_recorder_logic_test.cpp    # v1.5.0 pillar 4: recorder decisions, PE layout, file text
     remote_toml_logic_test.cpp
     remote_toml_load_source_test.cpp
     forge_base_cache_test.cpp

@@ -59,6 +59,8 @@ namespace {
         DonateSettings donate;
         // [compatibility] denuvo_aliases -- false = no alias files are written.
         bool compatDenuvoAliases = false;
+        // [shadow] record -- false = the pattern fingerprint recorder never runs.
+        bool shadowRecord = false;
     };
 
     std::mutex g_mutex;
@@ -108,6 +110,7 @@ namespace {
         cacheUrl               = snapshot.cacheUrl;
         donate                 = snapshot.donate;
         compatDenuvoAliases    = snapshot.compatDenuvoAliases;
+        shadowRecord           = snapshot.shadowRecord;
     }
 
     void ApplyManifestProvider(const std::string& provider) {
@@ -314,6 +317,12 @@ namespace {
                     snapshot.compatDenuvoAliases = *val;
             }
 
+            // [shadow] -- record=false (default) never starts the recorder.
+            if (auto shadow = tbl["shadow"].as_table()) {
+                if (auto val = (*shadow)["record"].value<bool>())
+                    snapshot.shadowRecord = *val;
+            }
+
             ApplyManifestProvider(snapshot.manifestProvider);
             ManifestClient::SetUrlTemplateOverride(snapshot.manifestUrlTemplate);
             ManifestClient::SetFailoverEnabled(snapshot.manifestFailover);
@@ -417,6 +426,11 @@ namespace {
     DonateSettings GetDonateSettings() {
         const std::lock_guard lock(g_mutex);
         return donate;
+    }
+
+    bool GetShadowRecord() {
+        const std::lock_guard lock(g_mutex);
+        return shadowRecord;
     }
 
     bool GetCompatDenuvoAliases() {

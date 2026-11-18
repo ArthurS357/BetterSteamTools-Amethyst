@@ -69,7 +69,17 @@ prepares the data needed to migrate patterns safely in v1.5.1.
 - Status 2026-11-18: delivered and unit-tested; the test also runs in the Linux logic-test job. Not yet run against a real
   game (the field tests that day covered pillar 2 and an unrelated install error), so the open point above stands.
 
-### 4. Shadow migration: planned, not started
+### 4. Shadow migration: engine and recorder implemented, tool not started
+
+Status 2026-11-18: `PatternMigrateLogic.h` (engine), `PatternRecorderLogic.h` / `PatternRecorder.cpp` and
+`PatternLoader::StartShadowRecording` (recorder, `[shadow] record`, **off by default**) are in. `tools/pattern_migrate`
+is not. Two things changed against the plan below, both found while implementing it:
+
+- The recorder reads the DLL **from disk**, not from the mapped module. It runs after the hooks are installed, and an
+  inline detour overwrites the first bytes of exactly the functions being fingerprinted; the file on disk keeps the
+  original bytes and is what the SHA-256 in the file name was computed from.
+- The default is **off**, closing the open decision at the end of this section: the files only help a maintainer who
+  will run the tool, and the cost is a ~20 MB read per Steam build. The maintainer turns it on before the next update.
 
 Goal: when Steam ships a build that no mirror has a TOML for yet, a maintainer can produce one from data the client
 recorded while the previous build worked, with a measured error rate. Nothing here changes hooking or migrates at runtime.
@@ -82,8 +92,9 @@ recorded while the previous build worked, with a measured error rate. Nothing he
 - Where: a detached worker thread started after `PatternLoader::StartCacheRevalidation`, never on Steam's loader path. Same
   shape as the revalidation job: the worker gets a copied snapshot (module handle, SHA, resolved name -> RVA) and shares
   no lock with the hooks.
-- It reads only the already-mapped `.text` and `.pdata` through `OSTPlatform::Memory::GetModuleSection`, which is
-  read-only and works on code pages that do not change while the module is loaded.
+- ~~It reads only the already-mapped `.text` and `.pdata` through `OSTPlatform::Memory::GetModuleSection`.~~ Replaced:
+  it reads the DLL file on disk (PE headers, then the `.text` and exception-directory ranges, with caps on sizes and
+  every range checked against the file), see the status above.
 - What, per resolved function:
   - name and RVA;
   - `.pdata` range (begin, size), or "none" for leaf functions without an unwind entry;
@@ -147,7 +158,7 @@ recorded while the previous build worked, with a measured error rate. Nothing he
 
 **Open decisions**
 
-- Recorder default: on (local files only, once per build) or opt-in like `[donate]` / `[cache]`.
+- ~~Recorder default: on or opt-in.~~ Decided: opt-in, `[shadow] record = false`.
 - Length of the masked prefix (64 bytes proposed).
 - Whether the anchor check makes v1.5.0 or waits for v1.5.1.
 

@@ -49,8 +49,13 @@ Independence and stability. Scope and rationale: [docs/ROADMAP-v1.5.0.md](docs/R
   - Workaround documented in the README (all three languages) under "Invalid content configuration when installing a Lua-added game". The guard is unchanged.
 - Trace logging added for this (Debug + `log.level = "trace"` only, compiled out in Release): Steam's own ownership answer per Lua id in `CheckAppOwnership`, and the ownership state of the app and of the Lua ids just above it when the guard rejects.
 
+### Added (shadow recorder, pillar 4)
+- **`[shadow] record` (off by default): the fingerprint recorder.** Once per Steam build, after hook install and only when every required function resolved, a background thread (low priority, every exception caught) works on a copy of the resolved `(name, RVA)` list taken under the existing `PatternLoader` mutex, so it shares no lock with the hooks. It reads `steamclient64.dll` / `steamui.dll` from disk and writes `<Steam>\amethysttool\fingerprint\<component>\<sha256>.toml` through a temp file and an atomic rename (`RemoteToml::ReplaceCacheFile`). Per function: name, RVA, `.pdata` size, the first ~64 bytes of code with call/jump and RIP-relative displacements masked, how many times that prefix matches, and the known functions it calls. Local only, nothing is sent, nothing reads the files yet. Code: `PatternRecorderLogic.h` (decision, PE layout, file text), `PatternRecorder.cpp` (disk side), `PatternLoader::StartShadowRecording`.
+- **Read from disk, not from the loaded module** (the roadmap said mapped sections): by the time the recorder runs the hooks are installed, and an inline detour overwrites the first bytes of exactly the functions being fingerprinted. The file on disk keeps the original bytes and is what the SHA-256 in the file name comes from. The file is read once into one buffer and its SHA-256 is compared with the one the file will be named after, so a DLL that Steam replaced after it was hashed is refused instead of being recorded under the old name (the review found this window; "already recorded" would have kept the wrong file forever). Sizes are capped (file 256 MB, `.text` 64 MB, `.pdata` 32 MB) and every range of the PE headers is checked against the file size. Not guarded: the RVAs are the ones the hooks resolved, which come from the pattern TOML RVA-first without a signature check, so a stale TOML RVA would be fingerprinted as it is.
+- **Off by default** because the files only matter to someone running `tools/pattern_migrate` (not written yet) and cost a ~20 MB read per Steam build. A maintainer turns it on in their own config before the next Steam update.
+
 ### Planned for this release (not implemented yet)
-- **Shadow fingerprint recorder** and the offline `pattern_migrate` tool. Runtime migration is deferred to v1.5.1.
+- The offline `pattern_migrate` tool. Runtime migration is deferred to v1.5.1.
 
 ## [v1.4.0] - 2026-11-06
 

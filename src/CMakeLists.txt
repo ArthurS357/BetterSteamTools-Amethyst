@@ -143,6 +143,7 @@ add_library(AmethystTool SHARED
     Utils/SteamMetadata/ManifestDonorLogic.cpp
     Utils/SteamMetadata/Mirror.cpp
     Utils/SteamMetadata/PatternLoader.cpp
+    Utils/SteamMetadata/PatternRecorder.cpp
     Utils/SteamMetadata/RemoteToml.cpp
     Utils/SteamMetadata/StatsClient.cpp
     Utils/SteamMetadata/SteamDiagnostics.cpp

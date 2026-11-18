@@ -6,6 +6,8 @@
 #include "Utils/Config/Config.h"
 #include "Utils/Logging/Log.h"
 #include "Utils/SteamMetadata/PatternLoaderLogic.h"
+#include "Utils/SteamMetadata/PatternRecorder.h"
+#include "Utils/SteamMetadata/PatternRecorderLogic.h"
 #include "Utils/SteamMetadata/PatternRefreshLogic.h"
 #include "Utils/SteamMetadata/RemoteToml.h"
 #include "Utils/SteamMetadata/RemoteTomlLogic.h"
@@ -252,12 +254,16 @@ struct LoadInfo {
     std::string cachedBody;   // kept only for a cache hit; revalidation diffs against it
 };
 
-// Guards g_loadInfo and g_requiredMisses. FindPattern normally runs on the init
-// thread, but some RESOLVE_FUNC lookups happen lazily on Steam threads.
+// Guards g_loadInfo, g_requiredMisses and g_resolved. FindPattern normally runs on the
+// init thread, but some RESOLVE_FUNC lookups happen lazily on Steam threads.
 std::mutex g_revalidateMutex;
 std::unordered_map<ModuleHandle, LoadInfo> g_loadInfo;
 std::unordered_map<ModuleHandle, std::vector<std::string>> g_requiredMisses;
+// Every function a lookup resolved, as (name, RVA in the module). Input of the shadow
+// recorder, which copies it under the lock and never touches it again.
+std::unordered_map<ModuleHandle, std::vector<PatternMigrateLogic::NamedRva>> g_resolved;
 std::atomic<bool> g_revalidationStarted{ false };
+std::atomic<bool> g_recordingStarted{ false };
 
 struct RevalidationJob {
     ModuleHandle             module = nullptr;
@@ -540,6 +546,15 @@ void* Find(OSTPlatform::DynamicLibrary::ModuleHandle module, const char* funcNam
         std::lock_guard<std::mutex> lock(g_revalidateMutex);
         g_requiredMisses[module].emplace_back(funcName);
     }
+    // The hit, for the shadow recorder (one-time lookup at hook install, not a hot path).
+    if (addr) {
+        const std::uintptr_t rva = reinterpret_cast<std::uintptr_t>(addr) -
+                                   reinterpret_cast<std::uintptr_t>(module);
+        if (rva <= UINT32_MAX) {
+            std::lock_guard<std::mutex> lock(g_revalidateMutex);
+            g_resolved[module].push_back({ funcName, static_cast<std::uint32_t>(rva) });
+        }
+    }
     return addr;
 }
 
@@ -620,6 +635,130 @@ void StartCacheRevalidation()
         }).detach();
     } catch (...) {
         LOG_ERROR("PatternLoader: could not start the cache revalidation worker; skipped");
+    }
+}
+
+namespace {
+
+struct RecordJob {
+    std::string                                component;
+    std::string                                sha256;
+    std::string                                dllPath;   // UTF-8
+    std::filesystem::path                      target;    // <Steam>\amethysttool\fingerprint\<component>\<sha256>.toml
+    std::vector<PatternMigrateLogic::NamedRva> resolved;  // a copy: the worker shares nothing with the hooks
+};
+
+void RecordOne(const RecordJob& job)
+{
+    const auto start = std::chrono::steady_clock::now();
+
+    std::string why;
+    const std::optional<std::string> body = PatternRecorder::BuildFingerprintFile(
+        OSTPlatform::Encoding::Utf8ToPath(job.dllPath), job.component, job.sha256, job.resolved, &why);
+    if (!body) {
+        LOG_WARN("PatternRecorder: {} not recorded: {}", job.component, why);
+        return;
+    }
+
+    // Temp file beside the target and an atomic rename (the cache's own writer), so a
+    // crash or a second Steam process never leaves a half-written file under the real name.
+    RemoveOrphanTempFiles(job.target.parent_path());
+    if (!RemoteToml::ReplaceCacheFile(job.target, *body)) {
+        LOG_WARN("PatternRecorder: {} not recorded: could not write {}", job.component,
+                 OSTPlatform::Encoding::PathToUtf8(job.target));
+        return;
+    }
+
+    [[maybe_unused]] const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - start).count();
+    LOG_INFO("PatternRecorder: recorded {} function(s) of {} to {} ({} ms)",
+             job.resolved.size(), job.component, OSTPlatform::Encoding::PathToUtf8(job.target), ms);
+}
+
+} // namespace
+
+void StartShadowRecording()
+{
+    if (g_recordingStarted.exchange(true)) return;   // once per process
+    if (!Config::GetShadowRecord()) return;          // off by default
+
+    // Under the mutex only copies are made. The stat, the path building and the logging
+    // below run after it is released, so a slow disk can never hold up a lazy FindPattern
+    // call on a Steam thread.
+    struct Snapshot {
+        std::string                                component;
+        std::string                                sha256;
+        std::string                                dllPath;
+        std::vector<PatternMigrateLogic::NamedRva> resolved;
+        std::size_t                                requiredMisses = 0;
+    };
+    std::vector<Snapshot> snapshots;
+    {
+        std::lock_guard<std::mutex> lock(g_revalidateMutex);
+        for (const auto& [module, info] : g_loadInfo) {
+            Snapshot s;
+            s.component = info.component;
+            s.sha256    = info.sha256;
+            s.dllPath   = info.dllPath;
+            if (const auto it = g_resolved.find(module); it != g_resolved.end()) s.resolved = it->second;
+            if (const auto it = g_requiredMisses.find(module); it != g_requiredMisses.end())
+                s.requiredMisses = it->second.size();
+            snapshots.push_back(std::move(s));
+        }
+    }
+
+    std::vector<RecordJob> jobs;
+    for (Snapshot& s : snapshots) {
+        // One entry per name: a function can be looked up more than once. The first wins.
+        std::stable_sort(s.resolved.begin(), s.resolved.end(),
+                         [](const auto& a, const auto& b) { return a.name < b.name; });
+        s.resolved.erase(std::unique(s.resolved.begin(), s.resolved.end(),
+                                     [](const auto& a, const auto& b) { return a.name == b.name; }),
+                         s.resolved.end());
+
+        RecordJob job;
+        job.component = s.component;
+        job.sha256    = s.sha256;
+        job.dllPath   = s.dllPath;
+        job.resolved  = std::move(s.resolved);
+        job.target    = RemoteToml::CachePathFor(RemoteToml::Request{ "fingerprint", s.component, s.dllPath }, s.sha256);
+
+        std::error_code ec;
+        const PatternRecorderLogic::Decision decision = PatternRecorderLogic::Decide({
+            .enabled        = true,
+            .requiredMisses = s.requiredMisses,
+            .resolvedCount  = job.resolved.size(),
+            .fileExists     = std::filesystem::exists(job.target, ec),
+        });
+        if (decision != PatternRecorderLogic::Decision::Record) {
+            LOG_INFO("PatternRecorder: {} skipped: {}", s.component, PatternRecorderLogic::ToString(decision));
+            continue;
+        }
+        jobs.push_back(std::move(job));
+    }
+    if (jobs.empty()) return;
+
+    // An exception escaping a std::thread body calls std::terminate and would take Steam
+    // down with it: catch everything in the worker, per job so one DLL failing (an
+    // allocation, say) does not cost the other its recording, and a failed thread
+    // creation here.
+    try {
+        std::thread([jobs = std::move(jobs)]() {
+            try {
+                PatternRecorder::UseBackgroundPriority();
+                for (const RecordJob& job : jobs) {
+                    try {
+                        RecordOne(job);
+                    } catch (...) {
+                        LOG_WARN("PatternRecorder: {} not recorded: exception", job.component);
+                    }
+                }
+            } catch (...) {
+                LOG_ERROR("PatternRecorder: worker aborted by an exception; nothing more is recorded this session");
+            }
+        }).detach();
+    } catch (...) {
+        LOG_ERROR("PatternRecorder: could not start the worker; skipped");
     }
 }
 

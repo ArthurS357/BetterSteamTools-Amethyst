@@ -271,3 +271,24 @@ enabled = false
 # Only enable it if you generate Denuvo tickets through LuaTools Validator.
 # Off by default. Read at Steam startup (not hot-reloaded).
 denuvo_aliases = false
+
+[shadow]
+# Shadow-mode fingerprint recorder (v1.5.0). OFF by default. For maintainers who want
+# to migrate the signature (pattern) files to a new Steam build by hand with
+# tools/pattern_migrate; nothing in AmethystTool reads what it writes.
+#
+# With record = true, once per Steam build, after the hooks are installed and only if
+# every required function was found, a low-priority background thread reads
+# steamclient64.dll / steamui.dll from disk and writes
+#   <Steam>\amethysttool\fingerprint\<component>\<sha256>.toml
+# (a temp file and an atomic rename). Each entry holds a function name, its RVA, the
+# size from the unwind table, the first ~64 bytes of code with the addresses that change
+# between builds masked, and which other known functions it calls.
+#
+# - Local files only: nothing is sent anywhere, no account, path, time or machine data.
+# - The DLL is read from disk, not from memory: the hooks have already overwritten the
+#   first bytes of the functions in memory.
+# - Costs one read of the DLL (~20 MB) and a few seconds of background CPU per Steam
+#   build; later launches only check that the file exists.
+# - Read at Steam startup (not hot-reloaded).
+record = false
