@@ -174,6 +174,7 @@ add_executable(AmethystToolTests
     pattern_migrate_logic_test.cpp
     pattern_recorder_logic_test.cpp
     pattern_recorder_test.cpp
+    pattern_migrate_cli_test.cpp
 
     # Units under test, compiled directly (no OSTPlatform lib link) — see header.
     "${_ostp}/Numbers.cpp"

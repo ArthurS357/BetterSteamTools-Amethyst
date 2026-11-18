@@ -69,11 +69,11 @@ prepares the data needed to migrate patterns safely in v1.5.1.
 - Status 2026-11-18: delivered and unit-tested; the test also runs in the Linux logic-test job. Not yet run against a real
   game (the field tests that day covered pillar 2 and an unrelated install error), so the open point above stands.
 
-### 4. Shadow migration: engine and recorder implemented, tool not started
+### 4. Shadow migration: engine, recorder and offline tool implemented; untested on a real Steam build
 
-Status 2026-11-18: `PatternMigrateLogic.h` (engine), `PatternRecorderLogic.h` / `PatternRecorder.cpp` and
-`PatternLoader::StartShadowRecording` (recorder, `[shadow] record`, **off by default**) are in. `tools/pattern_migrate`
-is not. Two things changed against the plan below, both found while implementing it:
+Status 2026-11-18: `PatternMigrateLogic.h` (engine), `PatternRecorderLogic.h` / `PatternRecorder.cpp`, `tools/pattern_migrate` and
+`PatternLoader::StartShadowRecording` (recorder, `[shadow] record`, **off by default**) are in. Neither the recorder nor the
+tool has run against a real Steam build yet. Two things changed against the plan below, both found while implementing it:
 
 - The recorder reads the DLL **from disk**, not from the mapped module. It runs after the hooks are installed, and an
   inline detour overwrites the first bytes of exactly the functions being fingerprinted; the file on disk keeps the

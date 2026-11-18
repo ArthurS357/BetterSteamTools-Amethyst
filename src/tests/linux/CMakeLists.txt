@@ -64,6 +64,7 @@ set(LOGIC_TESTS
     pattern_loader_logic_test.cpp
     pattern_migrate_logic_test.cpp     # v1.5.0 pillar 4: header-only engine
     pattern_recorder_logic_test.cpp    # v1.5.0 pillar 4: recorder decisions, PE layout, file text
+    pattern_migrate_cli_test.cpp       # v1.5.0 pillar 4: tools/pattern_migrate args, fingerprint reader, TOML, report
     remote_toml_logic_test.cpp
     remote_toml_load_source_test.cpp
     forge_base_cache_test.cpp
@@ -126,6 +127,7 @@ foreach(f IN ITEMS
         "${_tests}/compat_alias_logic_test.cpp"
         "${_tests}/ugc_logic_test.cpp"
         "${_tests}/package_reconcile_logic_test.cpp"
+        "${_tests}/pattern_migrate_cli_test.cpp"
         "${_src}/Hook/AchievementsLogic.cpp"
         "${_src}/Hook/RichPresenceLogic.cpp"
         "${_src}/Utils/Config/CompatAliasLogic.cpp"

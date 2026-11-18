@@ -18,10 +18,10 @@ jobs:
 
       # Build only the host tool targets, not the AmethystTool DLL.
       - name: Build Release
-        run: cmake --build build --config Release --target ipc_codegen extract_tickets version_pin
+        run: cmake --build build --config Release --target ipc_codegen extract_tickets version_pin pattern_migrate
 
       - name: Build Debug
-        run: cmake --build build --config Debug --target ipc_codegen extract_tickets version_pin
+        run: cmake --build build --config Debug --target ipc_codegen extract_tickets version_pin pattern_migrate
 
       - name: Upload Release artifacts
         uses: actions/upload-artifact@v4
