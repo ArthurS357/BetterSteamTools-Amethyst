@@ -161,6 +161,10 @@ static uint32_t InitThread(OSTPlatform::DynamicLibrary::ModuleHandle selfModule)
     // exact Steam build. No-op for a healthy cache. See PatternRefreshLogic.h.
     PatternLoader::StartCacheRevalidation();
 
+    // Shadow-mode fingerprints for tools/pattern_migrate. OFF unless [shadow] record = true.
+    // Background thread, local files only. See PatternRecorderLogic.h.
+    PatternLoader::StartShadowRecording();
+
     // Optional Steam Cloud save redirection (CloudRedirect). No-op unless
     // [cloud].enabled is set and cloud_redirect.dll is present.
     CloudRedirectHost::Initialize(SteamInstallPath);

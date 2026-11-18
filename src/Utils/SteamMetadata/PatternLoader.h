@@ -28,4 +28,13 @@ namespace PatternLoader {
     // to restart Steam. Healthy modules never cause a request. Non-blocking.
     void StartCacheRevalidation();
 
+    // Shadow-mode recorder (v1.5.0, pillar 4). Call once, after StartCacheRevalidation.
+    // With [shadow] record = true (default false), for each module whose required
+    // functions all resolved and that has no fingerprint file yet, a low-priority
+    // background thread reads the DLL from disk and writes
+    // <Steam>/amethysttool/fingerprint/<component>/<sha256>.toml (temp file + atomic
+    // rename). It works on a copy of the (name, rva) list taken here, shares no lock
+    // with the hooks, and catches every exception. Local files only; nothing is sent.
+    void StartShadowRecording();
+
 } // namespace PatternLoader
