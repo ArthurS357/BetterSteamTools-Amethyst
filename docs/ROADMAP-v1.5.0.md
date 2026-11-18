@@ -66,14 +66,90 @@ prepares the data needed to migrate patterns safely in v1.5.1.
 - Still open, needs a real game: whether Steam shows an update as pending because the `buildid` differs. The tool was
   exercised against real manifests and the real `LuaConfig` parses its output, but it was not run against a Steam that
   has an update waiting.
+- Status 2026-11-18: delivered and unit-tested; the test also runs in the Linux logic-test job. Not yet run against a real
+  game (the field tests that day covered pillar 2 and an unrelated install error), so the open point above stands.
 
-### 4. Shadow migration, not started
+### 4. Shadow migration: planned, not started
 
-- Recorder: on each healthy launch, store a fingerprint per resolved function (masked bytes, `.pdata` function size,
-  match count) under `amethysttool\fingerprint\`. No behaviour change.
-- Offline tool `tools/pattern_migrate`: a maintainer runs it against a new Steam DLL, reviews the diff and publishes to a mirror.
-- Both share one pure engine, unit-tested like `PatternRefreshLogic.h`.
-- Runtime migration waits for v1.5.1 and for data from at least two Steam updates.
+Goal: when Steam ships a build that no mirror has a TOML for yet, a maintainer can produce one from data the client
+recorded while the previous build worked, with a measured error rate. Nothing here changes hooking or migrates at runtime.
+
+**Recorder (in the DLL, "shadow mode")**
+
+- When: after hooks install, only if every required function resolved, and only **once per DLL SHA-256**. If
+  `<Steam>\amethysttool\fingerprint\<component>\<sha256>.toml` exists, nothing runs. The cost is one pass per Steam build,
+  not one per launch.
+- Where: a detached worker thread started after `PatternLoader::StartCacheRevalidation`, never on Steam's loader path. Same
+  shape as the revalidation job: the worker gets a copied snapshot (module handle, SHA, resolved name -> RVA) and shares
+  no lock with the hooks.
+- It reads only the already-mapped `.text` and `.pdata` through `OSTPlatform::Memory::GetModuleSection`, which is
+  read-only and works on code pages that do not change while the module is loaded.
+- What, per resolved function:
+  - name and RVA;
+  - `.pdata` range (begin, size), or "none" for leaf functions without an unwind entry;
+  - a masked byte prefix (rel32 `call`/`jmp`/`jcc` displacements and RIP-relative `disp32` masked);
+  - how many times that masked prefix matches in `.text`;
+  - the known functions it calls (call-graph anchors, as names resolved through the same RVA map).
+- Storage: one TOML per component and SHA, written through a temp file and a rename (the `ReplaceCacheFile` pattern), a
+  few KB per build. Local only: no network, nothing uploaded. Leftover temp files are cleaned by the same
+  `RemoveOrphanTempFiles` sweep.
+- Budget: about 36 functions, each a 64-byte prefix plus one uniqueness scan over `.text` (~15 MB). Expected well under a
+  second on the worker thread. The duration is logged so this can be checked.
+
+**Engine (pure, header-only `PatternMigrateLogic.h`)**, shared by the recorder and the tool
+
+- Masking rules: a minimal x64 decoder covering only the encodings above, unit-tested on hand-assembled buffers.
+- Candidate search in a new image: unique masked match, the match starts at a `.pdata` function begin, and the size is
+  within 25% of the recorded size.
+- New in the plan: the candidate must call the same already-migrated anchors.
+- A function with no `.pdata` entry is never auto-accepted; it is reported "needs manual".
+- Tests like `module_section_test`: synthetic PE images, including the shapes from the evidence below (a near-identical
+  neighbour 3 bytes shorter, a leaf function without `.pdata`).
+
+**Offline tool `tools/pattern_migrate`**
+
+- Input:
+  - `--fingerprint <old fingerprint .toml>`;
+  - `--dll <new steamclient64.dll or steamui.dll>`, read from the file on disk and mapped by section, never loaded;
+  - optional `--required <old pattern .toml>`, so required functions are known.
+- Output:
+  - a candidate `<new sha256>.toml` in the steam-monitor format (RVA per function);
+  - a report per function: `migrated`, `ambiguous`, `not found`, `size mismatch` or `needs manual`.
+  - Non-zero exit if any required function is not `migrated`.
+- It never writes into a Steam folder. Maintainer flow: run, review the report, try the TOML locally by dropping it into
+  `<Steam>\amethysttool\pattern\<component>\` (the existing manual path), then publish to a mirror of one's own
+  (`[remote] url_template`).
+
+**Risk: the ~4% silent error, and how the recorder reduces it**
+
+- Measured without the recorder (one Steam build, see Evidence below): 21 of 26 functions migrated correctly, 2 leaf
+  functions could not be checked, and 1 wrong function was accepted (`SendCallbackToPipe`, 76 B against 79 B). That is
+  1 in 26, about 4%, wrong and not flagged.
+- Mitigations:
+  - The recorder gives ground truth from the build that actually ran with a working TOML (exact size, masked bytes,
+    anchors) instead of signatures carried over from a TOML.
+  - The anchor check rejects a same-sized neighbour that calls different functions, which is the shape of the
+    `SendCallbackToPipe` case.
+  - Leaf functions without `.pdata` are flagged, never guessed.
+  - Output goes to a human and through the existing H-1/H-1b checks (RVA inside the image) before any client uses it.
+  - Fingerprints from at least two Steam updates measure the real error rate before v1.5.1 considers runtime migration.
+- Remaining risk: a wrong RVA that passes review hooks the wrong function and can crash Steam. That is why v1.5.0 stops
+  at an offline, reviewed tool.
+
+**Acceptance for pillar 4**
+
+- The recorder writes one fingerprint per build, with no measurable delay to hook install (duration logged), and is
+  silent when the file exists.
+- Engine tests are green on Windows and in the Linux logic-test job.
+- Replayed on the cached TOMLs of the audit machine (builds of 2026-10-21 and 2026-11-12/17), the tool reaches at least
+  21 of 26, and rejects `SendCallbackToPipe` or reports it as ambiguous.
+- No runtime migration, no new network traffic.
+
+**Open decisions**
+
+- Recorder default: on (local files only, once per build) or opt-in like `[donate]` / `[cache]`.
+- Length of the masked prefix (64 bytes proposed).
+- Whether the anchor check makes v1.5.0 or waits for v1.5.1.
 
 ### Outside the pillars: cache-miss mirror order (from upstream v1.0.9, implemented)
 
