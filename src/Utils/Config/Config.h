@@ -73,6 +73,7 @@ namespace Config {
     bool GetStatsEnableApi();
     bool GetUpdateEnabled();
     bool GetCompatDenuvoAliases();
+    bool GetShadowRecord();
 
     // [manifest] — provider selection and `failover` live in ManifestClient (table-driven).
     inline uint32_t manifestTimeoutResolve = 5000;
@@ -143,5 +144,14 @@ namespace Config {
     // Validator) recognises the engine. Read once at startup; the aliases are
     // never read by AmethystTool itself. See CompatAliasLogic.h.
     inline bool compatDenuvoAliases = false;
+
+    // [shadow] record (v1.5.0, pillar 4) - OFF by default. When true, after the
+    // hooks are installed and every required function resolved, a background
+    // thread records a local fingerprint of each resolved function, read from the
+    // Steam DLL on disk, to <Steam>/amethysttool/fingerprint/<component>/<sha256>.toml,
+    // once per Steam build. Local files only: nothing is sent anywhere and nothing
+    // reads them at runtime. They exist so a maintainer can later run
+    // tools/pattern_migrate. See PatternRecorderLogic.h.
+    inline bool shadowRecord = false;
 
 }
