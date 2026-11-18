@@ -74,6 +74,7 @@ set(LOGIC_TESTS
     online_fix_logic_test.cpp
     local_achievements_logic_test.cpp
     manifest_url_logic_test.cpp
+    manifest_failover_logic_test.cpp   # v1.5.0; ManifestFailoverLogic.h + ManifestUrlLogic.cpp
     manifest_donor_logic_test.cpp
     ticket_parsing_test.cpp
     tokeer_parsing_test.cpp
