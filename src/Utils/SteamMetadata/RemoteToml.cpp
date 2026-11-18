@@ -128,30 +128,24 @@ Result FetchOnMiss(const Request& request, const std::string& sha256)
     // 4. Cache miss — try remote (mirror chain; order in RemoteTomlLogic).
     const std::vector<std::string> urls = RemoteTomlLogic::BuildMirrorUrls(
         BuildUrlTemplates(), request.channel, request.component, out.sha256);
-    OSTPlatform::Http::Result http;
+    // Mirrors are independent repos with possibly different coverage, so a 404
+    // (or any non-200) on one does NOT imply the others lack the file — the walk
+    // always falls through to the next mirror.
     std::string lastUrl;
-
-    for (size_t i = 0; i < urls.size(); ++i) {
-        lastUrl = urls[i];
-        LOG_INFO("RemoteToml({}/{}): downloading {}",
-                 request.channel, request.component, lastUrl);
-
-        http = OSTPlatform::Http::Execute(L"GET", lastUrl.c_str(),
-                                          nullptr, 0, nullptr);
-
-        if (RemoteTomlLogic::IsMirrorHit(http.ok, http.status)) break;
-
-        // Mirrors are independent repos with possibly different coverage, so a 404
-        // (or any non-200) on one does NOT imply the others lack the file — always
-        // fall through to the next mirror.
-        if (i + 1 < urls.size()) {
-            LOG_WARN("RemoteToml({}/{}): mirror failed ({} ok={} HTTP={}), trying next",
-                     request.channel, request.component, lastUrl, http.ok, http.status);
-        } else {
-            LOG_WARN("RemoteToml({}/{}): mirror failed ({} ok={} HTTP={}), no more mirrors",
-                     request.channel, request.component, lastUrl, http.ok, http.status);
-        }
-    }
+    OSTPlatform::Http::Result http = RemoteTomlLogic::WalkMissMirrors<OSTPlatform::Http::Result>(
+        urls,
+        [&](const std::string& url, uint32_t resolveMs, uint32_t connectMs,
+            uint32_t sendMs, uint32_t recvMs) {
+            LOG_INFO("RemoteToml({}/{}): downloading {}",
+                     request.channel, request.component, url);
+            OSTPlatform::Http::Result r = OSTPlatform::Http::Execute(
+                L"GET", url.c_str(), nullptr, 0, nullptr, resolveMs, connectMs, sendMs, recvMs);
+            if (!RemoteTomlLogic::IsMirrorHit(r.ok, r.status))
+                LOG_WARN("RemoteToml({}/{}): mirror failed ({} ok={} HTTP={})",
+                         request.channel, request.component, url, r.ok, r.status);
+            return r;
+        },
+        lastUrl);
 
     // 5. Remote OK → write cache, return body.
     if (RemoteTomlLogic::IsMirrorHit(http.ok, http.status) && !http.body.empty()) {
@@ -225,7 +219,8 @@ std::filesystem::path CachePathFor(const Request& request, const std::string& sh
 }
 
 RemoteBody FetchRemoteOnly(const Request& request, const std::string& sha256,
-                           uint32_t timeoutMs, uint32_t recvTimeoutMs, bool requireHttps)
+                           uint32_t timeoutMs, uint32_t recvTimeoutMs, bool requireHttps,
+                           std::string_view skipBody)
 {
     RemoteBody out;
     if (sha256.empty()) return out;
@@ -244,6 +239,13 @@ RemoteBody FetchRemoteOnly(const Request& request, const std::string& sha256,
             L"GET", url.c_str(), nullptr, 0, nullptr,
             timeoutMs, timeoutMs, timeoutMs, recvTimeoutMs);
         if (RemoteTomlLogic::IsMirrorHit(http.ok, http.status) && !http.body.empty()) {
+            // A CDN copy can lag the repo by hours (jsDelivr caches branch paths), so
+            // a body identical to the caller's cache says nothing: try the next mirror.
+            if (!skipBody.empty() && http.body == skipBody) {
+                LOG_DEBUG("RemoteToml({}/{}): {} serves the cached body, trying next mirror",
+                          request.channel, request.component, url);
+                continue;
+            }
             out.ok = true;
             out.body = std::move(http.body);
             return out;

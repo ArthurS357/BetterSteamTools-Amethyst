@@ -9,6 +9,8 @@
 #include <unordered_map>
 #include <unordered_set>
 
+#include "Utils/SteamMetadata/RemoteTomlLogic.h"
+
 // Pure policy behind PatternLoader's self-healing cache refresh (v1.3.4),
 // split out (header-only) so it is unit-testable without WinHTTP, the
 // filesystem, the TOML parser or a live module -- same pattern as
@@ -41,9 +43,10 @@ namespace PatternRefreshLogic {
 
     // Timeouts for re-downloading a cached TOML that no longer parses. That path
     // is a cache-miss equivalent on the init thread, so it uses the same values
-    // as RemoteToml::Fetch's cache-miss walk (OSTPlatform::Http defaults).
-    inline constexpr uint32_t kCorruptCacheRefetchTimeoutMs     = 5000;
-    inline constexpr uint32_t kCorruptCacheRefetchRecvTimeoutMs = 10000;
+    // resolve/connect and recv budget as RemoteToml::FetchOnMiss
+    // (RemoteTomlLogic::kMiss*). FetchRemoteOnly uses the connect value for send.
+    inline constexpr uint32_t kCorruptCacheRefetchTimeoutMs     = RemoteTomlLogic::kMissTimeoutMs;
+    inline constexpr uint32_t kCorruptCacheRefetchRecvTimeoutMs = RemoteTomlLogic::kMissRecvTimeoutMs;
 
     // One pattern-file entry, keyed in EntryMap by Fnv1aHash(function name) --
     // the same layout PatternLoader parses the TOML into.
