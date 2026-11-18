@@ -50,7 +50,7 @@ namespace {
     }
 } // namespace
 
-Result Fetch(const Request& request)
+Result LoadCached(const Request& request)
 {
     namespace fs = std::filesystem;
     Result out;
@@ -72,18 +72,10 @@ Result Fetch(const Request& request)
     // 2. Cache path & dir. request.dllPath is UTF-8 (SteamUIPath/SteamclientPath, built
     // from OSTPlatform::DynamicLibrary::GetCurrentDirectoryPath() in dllmain.cpp), so it
     // goes through Utf8ToPath rather than the ANSI-codepage path(std::string) constructor.
-    fs::path cachePath = CachePathFor(request, out.sha256);
-    fs::path cacheDir  = cachePath.parent_path();
-    // Log-only text -- the actual I/O below (fs::exists/ifstream/ofstream) uses the
-    // cachePath/cacheDir fs::path objects directly, so this narrowing never touches disk.
+    const fs::path cachePath = CachePathFor(request, out.sha256);
+    // Log-only text -- the actual I/O below (fs::exists/ifstream) uses the cachePath
+    // fs::path object directly, so this narrowing never touches disk.
     const std::string cachePathText = OSTPlatform::Encoding::PathToUtf8(cachePath);
-
-    std::error_code mkdirEc;
-    fs::create_directories(cacheDir, mkdirEc);
-    if (mkdirEc) {
-        LOG_WARN("RemoteToml({}/{}): could not create cache dir {} ({})",
-                 request.channel, request.component, OSTPlatform::Encoding::PathToUtf8(cacheDir), mkdirEc.message());
-    }
 
     // 3. Cache-first (Amethyst fork): a pattern/IPC TOML is keyed by the DLL's exact
     // SHA-256, so a cached entry for this hash is authoritative and never goes stale
@@ -111,33 +103,49 @@ Result Fetch(const Request& request)
         }
     }
 
+    // Miss: ok = false, sha256 set. Whether to walk the mirrors is the caller's call
+    // (Fetch does; IPCLoader tries its embedded table first).
+    return out;
+}
+
+Result FetchOnMiss(const Request& request, const std::string& sha256)
+{
+    namespace fs = std::filesystem;
+    Result out;
+    out.sha256 = sha256;
+
+    const fs::path cachePath = CachePathFor(request, sha256);
+    const fs::path cacheDir  = cachePath.parent_path();
+    const std::string cachePathText = OSTPlatform::Encoding::PathToUtf8(cachePath);
+
+    std::error_code mkdirEc;
+    fs::create_directories(cacheDir, mkdirEc);
+    if (mkdirEc) {
+        LOG_WARN("RemoteToml({}/{}): could not create cache dir {} ({})",
+                 request.channel, request.component, OSTPlatform::Encoding::PathToUtf8(cacheDir), mkdirEc.message());
+    }
+
     // 4. Cache miss — try remote (mirror chain; order in RemoteTomlLogic).
     const std::vector<std::string> urls = RemoteTomlLogic::BuildMirrorUrls(
         BuildUrlTemplates(), request.channel, request.component, out.sha256);
-    OSTPlatform::Http::Result http;
+    // Mirrors are independent repos with possibly different coverage, so a 404
+    // (or any non-200) on one does NOT imply the others lack the file — the walk
+    // always falls through to the next mirror.
     std::string lastUrl;
-
-    for (size_t i = 0; i < urls.size(); ++i) {
-        lastUrl = urls[i];
-        LOG_INFO("RemoteToml({}/{}): downloading {}",
-                 request.channel, request.component, lastUrl);
-
-        http = OSTPlatform::Http::Execute(L"GET", lastUrl.c_str(),
-                                          nullptr, 0, nullptr);
-
-        if (RemoteTomlLogic::IsMirrorHit(http.ok, http.status)) break;
-
-        // Mirrors are independent repos with possibly different coverage, so a 404
-        // (or any non-200) on one does NOT imply the others lack the file — always
-        // fall through to the next mirror.
-        if (i + 1 < urls.size()) {
-            LOG_WARN("RemoteToml({}/{}): mirror failed ({} ok={} HTTP={}), trying next",
-                     request.channel, request.component, lastUrl, http.ok, http.status);
-        } else {
-            LOG_WARN("RemoteToml({}/{}): mirror failed ({} ok={} HTTP={}), no more mirrors",
-                     request.channel, request.component, lastUrl, http.ok, http.status);
-        }
-    }
+    OSTPlatform::Http::Result http = RemoteTomlLogic::WalkMissMirrors<OSTPlatform::Http::Result>(
+        urls,
+        [&](const std::string& url, uint32_t resolveMs, uint32_t connectMs,
+            uint32_t sendMs, uint32_t recvMs) {
+            LOG_INFO("RemoteToml({}/{}): downloading {}",
+                     request.channel, request.component, url);
+            OSTPlatform::Http::Result r = OSTPlatform::Http::Execute(
+                L"GET", url.c_str(), nullptr, 0, nullptr, resolveMs, connectMs, sendMs, recvMs);
+            if (!RemoteTomlLogic::IsMirrorHit(r.ok, r.status))
+                LOG_WARN("RemoteToml({}/{}): mirror failed ({} ok={} HTTP={})",
+                         request.channel, request.component, url, r.ok, r.status);
+            return r;
+        },
+        lastUrl);
 
     // 5. Remote OK → write cache, return body.
     if (RemoteTomlLogic::IsMirrorHit(http.ok, http.status) && !http.body.empty()) {
@@ -195,6 +203,13 @@ Result Fetch(const Request& request)
     return out;
 }
 
+Result Fetch(const Request& request)
+{
+    Result out = LoadCached(request);
+    if (out.ok || out.sha256.empty()) return out;   // hit, or the DLL could not be hashed
+    return FetchOnMiss(request, out.sha256);
+}
+
 std::filesystem::path CachePathFor(const Request& request, const std::string& sha256)
 {
     // request.dllPath is UTF-8 -> Utf8ToPath, never the ANSI path(std::string) ctor.
@@ -204,7 +219,8 @@ std::filesystem::path CachePathFor(const Request& request, const std::string& sh
 }
 
 RemoteBody FetchRemoteOnly(const Request& request, const std::string& sha256,
-                           uint32_t timeoutMs, uint32_t recvTimeoutMs, bool requireHttps)
+                           uint32_t timeoutMs, uint32_t recvTimeoutMs, bool requireHttps,
+                           std::string_view skipBody)
 {
     RemoteBody out;
     if (sha256.empty()) return out;
@@ -223,6 +239,13 @@ RemoteBody FetchRemoteOnly(const Request& request, const std::string& sha256,
             L"GET", url.c_str(), nullptr, 0, nullptr,
             timeoutMs, timeoutMs, timeoutMs, recvTimeoutMs);
         if (RemoteTomlLogic::IsMirrorHit(http.ok, http.status) && !http.body.empty()) {
+            // A CDN copy can lag the repo by hours (jsDelivr caches branch paths), so
+            // a body identical to the caller's cache says nothing: try the next mirror.
+            if (!skipBody.empty() && http.body == skipBody) {
+                LOG_DEBUG("RemoteToml({}/{}): {} serves the cached body, trying next mirror",
+                          request.channel, request.component, url);
+                continue;
+            }
             out.ok = true;
             out.body = std::move(http.body);
             return out;

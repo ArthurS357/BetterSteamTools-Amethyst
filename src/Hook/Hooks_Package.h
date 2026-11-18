@@ -43,4 +43,9 @@ namespace Hooks_Package {
         std::vector<uint32_t>         depots;
     };
     OwnedDepots GetOwnedDepots();
+
+    // Diagnostics: is `id` in the injected package's AppIdVec right now?
+    // Takes g_appIdVecMutex, so never call it while holding LuaConfig's lock.
+    enum class InjectedState { NotReady, Absent, Present };
+    InjectedState GetInjectedState(AppId_t id);
 }

@@ -57,9 +57,12 @@ set(LOGIC_TESTS
     # new in v1.4.0 (-Werror, see below)
     ugc_logic_test.cpp
     package_reconcile_logic_test.cpp
+    # new in v1.5.0 (header-only logic + CompatAliasLogic.cpp's temp-and-rename, below)
+    version_pin_logic_test.cpp
     # header-only logic
     pattern_refresh_logic_test.cpp
     pattern_loader_logic_test.cpp
+    pattern_migrate_logic_test.cpp     # v1.5.0 pillar 4: header-only engine
     remote_toml_logic_test.cpp
     remote_toml_load_source_test.cpp
     forge_base_cache_test.cpp
@@ -72,6 +75,7 @@ set(LOGIC_TESTS
     online_fix_logic_test.cpp
     local_achievements_logic_test.cpp
     manifest_url_logic_test.cpp
+    manifest_failover_logic_test.cpp   # v1.5.0; ManifestFailoverLogic.h + ManifestUrlLogic.cpp
     manifest_donor_logic_test.cpp
     ticket_parsing_test.cpp
     tokeer_parsing_test.cpp

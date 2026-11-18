@@ -235,6 +235,16 @@ namespace {
         Hooks_Package::TryDumpOwnedDepots();
 
         if (LuaConfig::HasDepot(appId,false)) {
+            // Diagnostics (Debug + log.level = "trace" only): Steam's own answer
+            // before the override below, and which branch it takes.
+            LOG_PACKAGE_TRACE("CheckAppOwnership: appId={} result={} pkg={} existInPkgs={} ownsLicense={} "
+                              "releaseState={} -> {}",
+                              appId, result, pOwn ? pOwn->PackageId : 0,
+                              pOwn ? pOwn->ExistInPackageNums : 0,
+                              pOwn ? pOwn->bOwnsLicense : false,
+                              pOwn ? static_cast<int>(pOwn->ReleaseState) : -1,
+                              (result && pOwn && pOwn->ExistInPackageNums > 1)
+                                  ? "actually owned (MarkOwned, real result)" : "injected (pkg 0, true)");
             if (result && pOwn->ExistInPackageNums > 1) {
                 // Actually owned — record so HasDepot excludes it going forward
                 LuaConfig::MarkOwned(appId);
@@ -285,6 +295,13 @@ namespace Hooks_Package {
     OwnedDepots GetOwnedDepots() {
         std::lock_guard<std::mutex> lock(g_ownedDepotsMutex);
         return {g_ownedDepotsReady, g_ownedDepots};
+    }
+
+    InjectedState GetInjectedState(AppId_t id) {
+        PackageInfo* pPkg = g_pInjectedPackageInfo;
+        if (!pPkg) return InjectedState::NotReady;
+        std::scoped_lock lock(g_appIdVecMutex);
+        return ContainsAppId(pPkg->AppIdVec, id) ? InjectedState::Present : InjectedState::Absent;
     }
 
     void Install() {

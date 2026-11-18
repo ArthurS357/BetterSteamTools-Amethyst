@@ -65,7 +65,25 @@ url = "wudrm"
 # "steamrun" JSON parser.
 # url_template = "https://your-host/manifest/{gid}"
 
-# HTTP timeouts for manifest requests (milliseconds).
+# Provider failover (default: true). If the provider selected by `url` fails --
+# no answer or a 5xx -- the request code is fetched from the next one
+# instead: wudrm, then steamrun (the provider you selected always goes first).
+# The whole chain shares a budget of about 10 seconds, and a provider that is
+# down is skipped for 5 minutes so later requests do not each wait for its
+# timeout. A 404, a 429 or an unreadable answer just moves on to the next
+# provider.
+#
+# Not used when `url_template` or manifest.lua answers: your own endpoint is
+# never swapped for a built-in one.
+#
+# Privacy: when the first provider fails, the manifest gid (and, for providers
+# that take it, the depot id) is sent to the next one as well. Nothing extra is
+# sent while the first provider answers. Set this to false to keep one provider.
+failover = true
+
+# HTTP timeouts for manifest requests (milliseconds). They are upper bounds per
+# phase; while failover has another provider waiting, no phase waits longer than
+# that provider's share of the ~10 second budget.
 # timeout_resolve_ms  — DNS resolution        (default: 5000)
 # timeout_connect_ms  — TCP handshake          (default: 5000)
 # timeout_send_ms     — request transmission   (default: 10000)
@@ -199,13 +217,15 @@ enabled = false
 [remote]
 # Optional metadata mirror(s). Leave unset to use the built-in mirror chain,
 # which is tried in order until one responds:
-#   1. https://raw.githubusercontent.com/madoiscool/steam-monitor/{channel}/{component}/{sha256}.toml
-#   2. https://cdn.jsdelivr.net/gh/madoiscool/steam-monitor@{channel}/{component}/{sha256}.toml
-#   3. https://raw.githubusercontent.com/OpenSteam001/steam-monitor/{channel}/{component}/{sha256}.toml
+#   1. https://cdn.jsdelivr.net/gh/madoiscool/steam-monitor@{channel}/{component}/{sha256}.toml
+#   2. https://git.lua.tools/luatools/steam-monitor/raw/branch/{channel}/{component}/{sha256}.toml
+#   3. https://raw.githubusercontent.com/madoiscool/steam-monitor/{channel}/{component}/{sha256}.toml
 #   4. https://cdn.jsdelivr.net/gh/OpenSteam001/steam-monitor@{channel}/{component}/{sha256}.toml
-#   5. https://git.lua.tools/luatools/steam-monitor/raw/branch/{channel}/{component}/{sha256}.toml
+#   5. https://raw.githubusercontent.com/OpenSteam001/steam-monitor/{channel}/{component}/{sha256}.toml
 # madoiscool is first because it is the actively maintained tracker;
 # OpenSteam001's pattern branch has had no commit since 2026-09-06.
+# jsDelivr comes before GitHub raw because raw.githubusercontent.com is
+# unreachable on some networks. Each mirror gets 2.5 s to resolve and connect.
 #
 # url_template may be a single string OR an array of strings. When set, it
 # REPLACES the built-in chain (the built-ins are not tried). Each entry must

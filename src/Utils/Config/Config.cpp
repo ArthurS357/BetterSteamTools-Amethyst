@@ -18,6 +18,11 @@ namespace {
         std::string manifestProvider = std::string(ManifestUrlLogic::kDefaultProviderName);
         // Empty = use manifestProvider's built-in URL. See ManifestClient::SetUrlTemplateOverride.
         std::string manifestUrlTemplate;
+        // [manifest] failover. On by default: when the configured provider fails the
+        // request code is fetched from the next one (ManifestFailoverLogic.h). The
+        // only extra data sent is the manifest gid (and depot id), to that next
+        // provider, and only after the first one failed. false = single provider.
+        bool manifestFailover = true;
         ManifestTimeouts manifestTimeouts;
         LogLevel logLevel = LogLevel::Debug;
         std::string logDir;
@@ -139,6 +144,7 @@ namespace {
             LOG_INFO("Config file not found, using defaults");
             ApplyManifestProvider(snapshot.manifestProvider);
             ManifestClient::SetUrlTemplateOverride(snapshot.manifestUrlTemplate);
+            ManifestClient::SetFailoverEnabled(snapshot.manifestFailover);
             ApplyHttpUserAgent(snapshot.httpUserAgent);
             LoadResult result = ApplySnapshotLocked(snapshot);
             LOG_INFO("Config loaded: manifest.url={} log.level={} lua.paths={} stats.enable_api={} remote.url_templates={}",
@@ -164,6 +170,10 @@ namespace {
                 // ManifestClient::SetUrlTemplateOverride.
                 if (auto val = (*manifest)["url_template"].value<std::string>()) {
                     snapshot.manifestUrlTemplate = *val;
+                }
+                // A non-boolean value is ignored and the default (true) stays.
+                if (auto val = (*manifest)["failover"].value<bool>()) {
+                    snapshot.manifestFailover = *val;
                 }
                 if (auto val = (*manifest)["timeout_resolve_ms"].value<int64_t>())
                     snapshot.manifestTimeouts.resolve = static_cast<uint32_t>(*val);
@@ -306,6 +316,7 @@ namespace {
 
             ApplyManifestProvider(snapshot.manifestProvider);
             ManifestClient::SetUrlTemplateOverride(snapshot.manifestUrlTemplate);
+            ManifestClient::SetFailoverEnabled(snapshot.manifestFailover);
             ApplyHttpUserAgent(snapshot.httpUserAgent);
             LoadResult result = ApplySnapshotLocked(snapshot);
             LOG_INFO("Config loaded: manifest.url={} log.level={} lua.paths={} stats.enable_api={} remote.url_templates={}",
@@ -329,6 +340,7 @@ namespace {
         if (shouldApplyDefault) {
             ApplyManifestProvider(snapshot.manifestProvider);
             ManifestClient::SetUrlTemplateOverride(snapshot.manifestUrlTemplate);
+            ManifestClient::SetFailoverEnabled(snapshot.manifestFailover);
             ApplyHttpUserAgent(snapshot.httpUserAgent);
             std::lock_guard lock(g_mutex);
             const bool luaChanged = luaPaths != snapshot.luaPaths;

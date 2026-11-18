@@ -56,7 +56,7 @@ AmethystTool is a privacy-hardened fork of OpenSteamTools. Behavioural differenc
 - Support auto load depot decryption keys from Lua config.
 - Support auto manifest download via `wudrm` / `steamrun` / `opensteamtool` upstream APIs (default is `wudrm` as of v1.3.0 — see [Provider defaults](#provider-defaults)), a custom Lua endpoint (see [Manifest via Lua](#manifest-via-lua)), or a custom URL template (see [Manifest via a custom endpoint](#manifest-via-a-custom-endpoint)).
 - Support downloading protected games or DLCs that require an access token.
-- Support binding manifest to prevent specific games from being updated.
+- Support binding manifest to prevent specific games from being updated (the `version_pin` tool writes it for you, see [Pinning the installed version](#pinning-the-installed-version-with-version_pin)).
 
 ### Hot Reload
 - Adding, modifying, deleting, or overwriting `.lua` files in any watched directory automatically triggers a reload. No restart, no offline/online toggle needed.
@@ -106,6 +106,26 @@ The `extract_tickets` tool dumps the `AppTicket` and `ETicket` hex strings you n
 
 > **Note:** Tickets are only valid when extracted from an account that **genuinely owns** the game.
 
+#### Pinning the installed version with `version_pin`
+
+`version_pin` freezes a game at the version installed right now, so a Steam update (or a regenerated Lua file) cannot change it. It reads `steamapps\appmanifest_<appid>.acf`, takes the manifest of every installed depot and writes `<appid>.pin.lua` with one `setManifestid` call per depot. It is offline: no network, no hook, nothing injected into Steam.
+
+1. Build the tools (see [Build](#build)); the binary lands in `build/tools/Release/version_pin.exe`.
+2. Run it:
+   ```powershell
+   version_pin.exe --appid 3357650     # one game
+   version_pin.exe --all               # every installed game (never the default: freezing all of them must be asked for)
+   version_pin.exe --dry-run           # print what would be written, change nothing
+   ```
+   The Steam folder comes from the registry. `--steam-dir <dir>` overrides it, `--steamapps <dir>` reads a library on another drive, `--out-dir <dir>` changes where the `.pin.lua` goes (default `<Steam>\config\stplug-in`).
+3. Restart Steam, or let the Lua hot reload pick the file up.
+
+- **Nothing is overwritten by surprise, and nothing is half pinned.** A manifest with an unusable `InstalledDepots` entry is refused, because the skipped depot would keep following Steam's updates. An existing `<appid>.pin.lua` is left alone unless you pass `--force`; one this tool wrote and that is already correct is reported as up to date. Exit code `2` means a game failed or was refused.
+- **Check the conflict warnings.** Lua files made by tools such as Luie usually already call `setManifestid` for every depot, with the manifest of the day they were generated. When another `.lua` pins the same depot to a different manifest, `version_pin` says so, and **the file the engine parsed last wins**. Edit or delete the other line to settle it.
+- **Undo it** by deleting the `.pin.lua`; Steam then follows its own updates again.
+- **No size is written.** The engine always forces it to 0.
+- **The pinned manifest must still be obtainable.** One already in `<Steam>\depotcache` needs no request code; any other needs one from a provider (see [Provider failover](#provider-failover)).
+
 ### Stats and Achievements
 - Enable stats and achievements for unowned games.
 - Uses `setStat(appid, "steamid")` to configure which SteamID's achievement data to pull.
@@ -130,8 +150,8 @@ addappid(1361511, 0,"5954562e7f5260400040a818bc29b60b335bb690066ff767e20d145a3b6
 
 addtoken(1361510,"2764735786934684318") -- add access token ("2764735786934684318") for game with appid 1361510 
 
-setManifestid(1361511,"5656605350306673283") -- pin depotid:1361511 manifest_gid:5656605350306673283, size defaults to 0
-setManifestid(1361511,"5656605350306673283", 12345678) -- same but with explicit size
+setManifestid(1361511,"5656605350306673283") -- pin depotid:1361511 manifest_gid:5656605350306673283 (tools/version_pin writes these from what is installed)
+setManifestid(1361511,"5656605350306673283", 12345678) -- a third argument is accepted but ignored: the engine always uses size 0
 
 setAppTicket(1361510,"0100000000000000...") -- write AppTicket to the credential store; on Windows: HKCU\Software\Valve\Steam\Apps\1361510\AppTicket
 
@@ -164,6 +184,9 @@ url = "wudrm"
 # Optional: bypass the providers above entirely with your own endpoint.
 # Must contain "{gid}". See "Manifest via a custom endpoint" below.
 # url_template = "https://your-host/manifest/{gid}"
+# If the provider above fails, try the next one (wudrm, then steamrun). Default: true.
+# See "Provider failover" below, including what it sends.
+failover = true
 
 # HTTP timeouts for manifest requests (milliseconds)
 timeout_resolve_ms = 5000
@@ -258,6 +281,16 @@ powershell -ExecutionPolicy Bypass -File .\enable-denuvo-compat.ps1 -Remove
 
 If your `amethysttool.toml` still has `url = "opensteamtool"` from before v1.3.0, switch it to `"wudrm"` (the new default) or `"steamrun"`. `opensteamtool` is kept as a selectable provider — it still works for content it does serve — but is no longer recommended as a default. If none of the three built-in providers work for your setup, see [Manifest via a custom endpoint](#manifest-via-a-custom-endpoint).
 
+### Provider failover
+
+**Since v1.5.0, `[manifest] failover` (default `true`) lets a second provider take over when the first one fails.** The provider you select with `url` always goes first; the others follow in the order `wudrm`, then `steamrun`. `opensteamtool` is never added on its own.
+
+- **When it moves on:** the provider gave no answer or a 5xx (it is down), or it answered 404, 429 or something that is not a request code (it lacks that code right now).
+- **Time limit:** the whole chain shares about 10 seconds, below the 12 seconds Steam waits for the code. A provider that fails quickly hands its unused time to the next one, and no `timeout_*_ms` phase waits longer than a provider's share. It is a best-effort limit: Steam's own 12 second wait is the hard stop.
+- **Skipping a dead provider:** one that gave no answer or a 5xx is skipped for 5 minutes, so later downloads do not each wait for its timeout. A 429 is not counted: several depots ask at once, so the burst may be ours. If every provider is in that state, all of them are tried anyway.
+- **What it does not touch:** `manifest.lua` functions and `url_template` keep their priority, and your own endpoint is never replaced by a built-in provider.
+- **What it sends:** when the first provider fails, the manifest `gid` (and the depot id, for providers that accept it) is sent to the next provider too. Nothing extra goes out while the first one answers. `wudrm` is `http://`, so its requests are not encrypted. Set `failover = false` to keep exactly one provider, as before v1.5.0.
+
 ### Manifest via Lua
 
 Two manifest code functions are supported:
@@ -337,11 +370,10 @@ Lookup order:
 
 1. **Local cache** — `<Steam>\amethysttool\pattern\<subdir>\<sha256>.toml`. A file is keyed by the DLL's exact SHA-256, so a cached entry is used as-is and no request is made. The network is only touched on a cache miss (typically the first launch after a Steam update).
 2. **Mirror chain** (cache miss only), tried in order until one returns HTTP 200:
-   1. [`madoiscool/steam-monitor`](https://github.com/madoiscool/steam-monitor) — GitHub raw, then jsDelivr. First because it is the actively maintained tracker.
-   2. [`OpenSteam001/steam-monitor`](https://github.com/OpenSteam001/steam-monitor) — GitHub raw, then jsDelivr. Kept as a fallback; its `pattern` branch has had no commit since 2026-09-06.
-   3. `git.lua.tools/luatools/steam-monitor`.
+   1. [`madoiscool/steam-monitor`](https://github.com/madoiscool/steam-monitor) — jsDelivr, then `git.lua.tools/luatools/steam-monitor`, then GitHub raw. First because it is the actively maintained tracker.
+   2. [`OpenSteam001/steam-monitor`](https://github.com/OpenSteam001/steam-monitor) — jsDelivr, then GitHub raw. Kept as a fallback; its `pattern` branch has had no commit since 2026-09-06.
 
-   jsDelivr helps in regions where `raw.githubusercontent.com` is blocked (e.g. mainland China). The successful body is written to the cache.
+   jsDelivr comes before GitHub raw because `raw.githubusercontent.com` is unreachable on some networks (e.g. mainland China), and a miss runs before the hooks install. Each mirror gets 2.5 s to resolve and 2.5 s to connect. The successful body is written to the cache.
 
 Mirrors are independent repos with different coverage, so a **404** on one does not stop the loop — the next mirror is tried. If every mirror fails, a one-shot popup appears with the unmatched DLL name, its SHA-256, the expected cache path, and the upstream URL. Only the hooks tied to that DLL are disabled — the rest of AmethystTool keeps working.
 
@@ -404,6 +436,25 @@ Debug builds write per-module log files under `<Steam>/amethysttool/`:
 
 The log level is controlled by `[log] level` in `amethysttool.toml`.
 
+### "Invalid content configuration" when installing a Lua-added game
+
+Steam builds a list of the game's depots before every install or update. When that list comes back empty for a Lua-added game, AmethystTool fails the call on purpose. Steam then shows **Invalid content configuration** (`Failed building depot dependency` in `<Steam>\logs\content_log.txt`). Letting the empty list through would be worse: Steam would mark the game installed with nothing downloaded ("0 mounted depots").
+
+The empty list comes from Steam's local state, not from the `.lua`. In the case that was traced (Undertale, 391540, November 2026), the list stayed empty for whole Steam sessions. Steam reported the same ownership for that game and its depots as for games that installed. Deleting Steam's app info cache fixed it on the first try.
+
+1. Exit Steam completely (tray icon → Exit).
+2. Delete the app info cache and the game's app manifest (here with a backup of the cache):
+   ```powershell
+   Copy-Item 'C:\Program Files (x86)\Steam\appcache\appinfo.vdf' 'C:\Program Files (x86)\Steam\appcache\appinfo.vdf.bak'
+   Remove-Item 'C:\Program Files (x86)\Steam\appcache\appinfo.vdf'
+   Remove-Item 'C:\Program Files (x86)\Steam\steamapps\appmanifest_<appid>.acf' -ErrorAction SilentlyContinue
+   ```
+3. Start Steam. The first start takes longer while Steam downloads app info again.
+4. Install the game.
+5. If it still fails, exit Steam, start it again and retry. A plain restart has also worked, but only once in six attempts.
+
+Do not put the old `appinfo.vdf` back afterwards: it brings the stale state back. Steam rebuilds the file on its own. In a Debug build, `manifest.log` shows `BuildDepotDependency: app <appid> returned 0 depots` for each rejected call.
+
 ## Antivirus and SmartScreen
 
 AmethystTool works by loading into Steam and installing in-process hooks (via Microsoft Detours). These are exactly the techniques antivirus heuristics look for, so **an unsigned build will very likely be flagged or quarantined** — this is a false positive inherent to the technique, not evidence of malware. Kaspersky, Defender, and others have been observed quarantining the freshly built DLLs.
@@ -449,7 +500,7 @@ Only exclude files you built or trust. If you would rather not weaken your prote
 - CMake 3.25+ and Ninja, if not already provided by the VS component above
 
 ### Runtime requirements
-- Outbound HTTPS access to `raw.githubusercontent.com` on first launch after a Steam update (see [Steam version compatibility](#steam-version-compatibility)). Cached afterwards.
+- Outbound HTTPS access to `cdn.jsdelivr.net` (or another mirror in the chain) on first launch after a Steam update (see [Steam version compatibility](#steam-version-compatibility)). Cached afterwards.
 
 ### Quick build
 ```powershell

@@ -3,14 +3,17 @@
 #include "Utils/Config/Config.h"
 #include "Utils/Config/LuaConfig.h"
 #include "Utils/Logging/Log.h"
+#include "Utils/SteamMetadata/ManifestFailoverLogic.h"
 #include "Utils/SteamMetadata/ManifestUrlLogic.h"
 
 #include <algorithm>
 #include <charconv>
+#include <chrono>
 #include <cstddef>
 #include <mutex>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace ManifestClient {
 
@@ -89,21 +92,34 @@ namespace ManifestClient {
         throw "ManifestUrlLogic::kDefaultProviderName has no matching row in kProviders";
     }
 
+    // g_mutex guards g_active, g_urlTemplateOverride and g_failover, and nothing
+    // else. It is NEVER held across a network call or a Lua call (v1.5.0): several
+    // depots ask for a code at once, and each of those waits could take seconds.
+    // Readers copy what they need under the lock (SnapshotState) and let go.
     static const Provider* g_active = &kProviders[FindDefaultProviderIndex()];
     static std::mutex      g_mutex;
 
-    // Empty = no override, use g_active (see SetUrlTemplateOverride). Only ever
-    // read/written under g_mutex.
+    // Empty = no override, use g_active (see SetUrlTemplateOverride).
     static std::string g_urlTemplateOverride;
 
-    bool SetProvider(std::string_view name) {
-        std::lock_guard<std::mutex> lock(g_mutex);
+    // [manifest] failover. On by default; see ManifestFailoverLogic.h for the policy.
+    static bool g_failover = true;
+
+    // Thread-safe by itself (its own leaf mutex), so it lives outside g_mutex.
+    static ManifestFailoverLogic::CircuitBreaker g_breaker;
+
+    static const Provider* FindProvider(std::string_view name) {
         for (const auto& p : kProviders)
-            if (p.name == name) {
-                g_active = &p;
-                return true;
-            }
-        return false;
+            if (p.name == name) return &p;
+        return nullptr;
+    }
+
+    bool SetProvider(std::string_view name) {
+        const Provider* found = FindProvider(name);
+        if (!found) return false;
+        std::lock_guard<std::mutex> lock(g_mutex);
+        g_active = found;
+        return true;
     }
 
     const char* ActiveProviderName() {
@@ -134,6 +150,11 @@ namespace ManifestClient {
         return true;
     }
 
+    void SetFailoverEnabled(bool enabled) {
+        std::lock_guard<std::mutex> lock(g_mutex);
+        g_failover = enabled;
+    }
+
     // ── request ───────────────────────────────────────────────────
 
     void Shutdown() {
@@ -144,55 +165,78 @@ namespace ManifestClient {
 
     constexpr int kHttpOk = 200;
 
-    static bool FetchActive(uint64_t gid, uint64_t* outCode, AppId_t appId, AppId_t depotId) {
-        // Called with g_mutex already held by FetchManifestRequestCode below, so
-        // g_urlTemplateOverride/g_active are read without a nested lock.
+    using ManifestFailoverLogic::AttemptOutcome;
+    using FailoverClock = ManifestFailoverLogic::Clock;
+
+    // The settings one fetch needs, copied under g_mutex so it can run without it.
+    struct State {
+        const Provider* active;
+        std::string     overrideTemplate;
+        bool            failover;
+    };
+
+    static State SnapshotState() {
+        std::lock_guard<std::mutex> lock(g_mutex);
+        return { g_active, g_urlTemplateOverride, g_failover };
+    }
+
+    // One GET. With `fit`, every WinHTTP phase is capped at the time left until
+    // `deadline` (ManifestFailoverLogic::CapTimeouts); without it the timeouts are
+    // exactly the configured ones, as before v1.5.0.
+    static OSTPlatform::Http::Result Get(const std::string& url, const Config::ManifestTimeouts& cfg,
+                                         FailoverClock::time_point deadline, bool fit) {
+        ManifestFailoverLogic::PhaseTimeouts t{ cfg.resolve, cfg.connect, cfg.send, cfg.recv };
+        if (fit) {
+            t = ManifestFailoverLogic::CapTimeouts(
+                t, std::chrono::duration_cast<ManifestFailoverLogic::Millis>(deadline - FailoverClock::now()));
+        }
+        return OSTPlatform::Http::Execute(L"GET", url.c_str(), nullptr, 0, nullptr,
+                                          t.resolve, t.connect, t.send, t.recv);
+    }
+
+    // What a Choice means for parsing and logging. Override (if set) short-circuits
+    // provider selection entirely -- ManifestUrlLogic::Build never falls back to a
+    // provider template when the override is non-empty -- and the user's endpoint
+    // always answers with a plain decimal code.
+    struct ChoiceInfo {
+        Parser      parse;
+        // Only read by the LOG_MANIFEST_* macros, which are no-ops in Release
+        // (see the OPENSTEAMTOOL_LOGGING_ENABLED comment in CMakeLists.txt).
+        [[maybe_unused]] const char* label;
+        [[maybe_unused]] const char* shape;
+    };
+
+    static ChoiceInfo DescribeChoice(const Provider& p, const ManifestUrlLogic::Choice& choice) {
+        switch (choice.shape) {
+        case ManifestUrlLogic::Shape::Override:   return { ParsePlainUint, "custom", "override" };
+        case ManifestUrlLogic::Shape::DepotAware: return { p.parse, p.name.data(), "app/depot/gid" };
+        case ManifestUrlLogic::Shape::GidOnly:    break;
+        }
+        return { p.parse, p.name.data(), "gid-only" };
+    }
+
+    // ONE provider's whole fetch (including its depot-aware -> gid-only retry).
+    // `fit` is true when other providers are waiting behind this one, so it must
+    // finish by `deadline`; false keeps the single-provider behaviour unchanged.
+    static AttemptOutcome FetchFromProvider(const Provider& p, const State& state, uint64_t gid,
+                                            AppId_t appId, AppId_t depotId,
+                                            FailoverClock::time_point deadline, bool fit) {
         const Config::ManifestTimeouts timeouts = Config::GetManifestTimeouts();
-        const Provider& p = *g_active;
-
-        // Override (if set) short-circuits provider selection entirely --
-        // ManifestUrlLogic::Build never falls back to a provider template when
-        // g_urlTemplateOverride is non-empty. Depot-aware-vs-gid-only for the
-        // provider path is likewise decided inside Build(), not here.
         const ManifestUrlLogic::Choice choice = ManifestUrlLogic::Build(
-            g_urlTemplateOverride, p.urlTemplate, p.urlTemplateEx, appId, depotId, gid);
-
-        Parser parse = p.parse;
-        // Only consumed by LOG_MANIFEST_INFO below, which is a no-op in Release
-        // (see the OPENSTEAMTOOL_LOGGING_ENABLED comment in CMakeLists.txt) --
-        // maybe_unused avoids an unused-but-set-variable warning in that config.
-        [[maybe_unused]] const char* providerName = p.name.data();
-        [[maybe_unused]] const char* shape = "gid-only";
-
-        if (choice.shape == ManifestUrlLogic::Shape::Override) {
-            parse = ParsePlainUint;
-            providerName = "custom";
-            shape = "override";
-            // Choice::truncated is always false for Override (see Build()) --
-            // nothing to warn about here.
-        } else {
-            shape = (choice.shape == ManifestUrlLogic::Shape::DepotAware) ? "app/depot/gid" : "gid-only";
-            if (choice.truncated) {
-                LOG_MANIFEST_WARN("manifest provider URL unexpectedly long, truncated: {}", p.name);
-            }
+            state.overrideTemplate, p.urlTemplate, p.urlTemplateEx, appId, depotId, gid);
+        const ChoiceInfo info = DescribeChoice(p, choice);
+        // Choice::truncated is always false for Override (see Build()).
+        if (choice.truncated) {
+            LOG_MANIFEST_WARN("manifest provider URL unexpectedly long, truncated: {}", p.name);
         }
 
-        auto r = OSTPlatform::Http::Execute(
-            L"GET",
-            choice.url.c_str(),
-            nullptr,
-            0,
-            nullptr,
-            timeouts.resolve,
-            timeouts.connect,
-            timeouts.send,
-            timeouts.recv);
+        auto r = Get(choice.url, timeouts, deadline, fit);
 
         // Log which shape was used: a gid-only request for a non-carrier depot
         // yields a code the CDN will reject, and that is otherwise invisible
         // until the download fails.
         LOG_MANIFEST_INFO("Manifest {} status={} gid={} depot={} shape={}",
-                          providerName, r.status, gid, depotId, shape);
+                          info.label, r.status, gid, depotId, info.shape);
 
         // Single fallback retry: a depot-aware request that failed (transport
         // error, non-200 -- includes a WAF/route rejection a provider server
@@ -202,30 +246,70 @@ namespace ManifestClient {
         // something else) or to GidOnly (nothing simpler to fall back to).
         // depotId=0 reuses Build()'s own "unknown depot" rule to force
         // Shape::GidOnly rather than duplicating that decision here.
-        if (ManifestUrlLogic::ShouldFallbackToGidOnly(choice.shape, !r.ok || r.status != kHttpOk)) {
+        // With failover on, ShouldRetryGidOnly also skips the retry for a provider
+        // that is down and when too little of this attempt's time is left.
+        const auto left = std::chrono::duration_cast<ManifestFailoverLogic::Millis>(deadline - FailoverClock::now());
+        if (ManifestFailoverLogic::ShouldRetryGidOnly(
+                ManifestUrlLogic::ShouldFallbackToGidOnly(choice.shape, !r.ok || r.status != kHttpOk),
+                fit, r.ok, r.status, left)) {
             LOG_MANIFEST_DEBUG("Manifest {} depot-aware failed (status={}), retrying gid-only for gid={}",
-                               providerName, r.status, gid);
+                               info.label, r.status, gid);
 
             const ManifestUrlLogic::Choice fallback = ManifestUrlLogic::Build(
-                g_urlTemplateOverride, p.urlTemplate, p.urlTemplateEx, appId, /*depotId=*/0, gid);
+                state.overrideTemplate, p.urlTemplate, p.urlTemplateEx, appId, /*depotId=*/0, gid);
 
-            r = OSTPlatform::Http::Execute(
-                L"GET",
-                fallback.url.c_str(),
-                nullptr,
-                0,
-                nullptr,
-                timeouts.resolve,
-                timeouts.connect,
-                timeouts.send,
-                timeouts.recv);
+            r = Get(fallback.url, timeouts, deadline, fit);
 
             LOG_MANIFEST_INFO("Manifest {} status={} gid={} depot={} shape=gid-only (fallback)",
-                              providerName, r.status, gid, depotId);
+                              info.label, r.status, gid, depotId);
         }
 
-        if (!r.ok || r.status != kHttpOk) return false;
-        return parse(r.body, outCode);
+        AttemptOutcome outcome;
+        outcome.transportOk = r.ok;
+        outcome.status = r.status;
+        outcome.gotCode = r.ok && r.status == kHttpOk && info.parse(r.body, &outcome.code);
+        return outcome;
+    }
+
+    // The provider chain for the current settings (ManifestFailoverLogic.h), with
+    // no lock held while the providers are on the wire.
+    static bool FetchFromProviders(uint64_t gid, uint64_t* outCode, AppId_t appId, AppId_t depotId) {
+        const State state = SnapshotState();
+        const bool hasOverride = !state.overrideTemplate.empty();
+
+        // "custom" names the user's own endpoint in the breaker, so a failure there
+        // never quarantines a built-in provider that was not even contacted.
+        const std::vector<std::string> chain = ManifestFailoverLogic::BuildChain(
+            hasOverride ? std::string_view("custom") : state.active->name, state.failover, hasOverride);
+        const bool fit = chain.size() > 1;
+
+        const ManifestFailoverLogic::ChainResult result = ManifestFailoverLogic::RunChain(
+            chain, g_breaker, ManifestFailoverLogic::kTotalBudget,
+            [] { return FailoverClock::now(); },
+            [&](const std::string& name, FailoverClock::time_point deadline) {
+                // "custom" has no table row: the override URL is built from the state,
+                // and the active provider only lends its (unused) templates and parser.
+                const Provider* p = FindProvider(name);
+                if (!p) p = state.active;
+                const AttemptOutcome outcome = FetchFromProvider(*p, state, gid, appId, depotId, deadline, fit);
+                if (!outcome.gotCode && fit && ManifestFailoverLogic::IsProviderDown(outcome.transportOk, outcome.status)) {
+                    LOG_MANIFEST_WARN("Manifest provider {} is down (ok={} status={}); skipping it for {} min",
+                                      name, outcome.transportOk, outcome.status,
+                                      ManifestFailoverLogic::kQuarantine.count());
+                }
+                return outcome;
+            });
+
+        if (!result.ok) {
+            if (fit)
+                LOG_MANIFEST_WARN("Manifest gid={} no provider answered ({} asked)", gid, result.attempts);
+            return false;
+        }
+        if (result.attempts > 1) {
+            LOG_MANIFEST_INFO("Manifest gid={} answered by {} after {} attempts", gid, result.provider, result.attempts);
+        }
+        *outCode = result.code;
+        return true;
     }
 
     // ── public ────────────────────────────────────────────────────
@@ -233,8 +317,8 @@ namespace ManifestClient {
     bool FetchManifestRequestCode(uint64_t manifestGid, uint64_t* outRequestCode,
                                   AppId_t appId, AppId_t depotId)
     {
-        std::lock_guard<std::mutex> lock(g_mutex);
-
+        // No lock here (v1.5.0): the Lua functions call http_get and the providers
+        // are network calls; either can take seconds and must not queue other depots.
         if (appId && depotId && LuaConfig::HasManifestCodeFuncEx()) {
             if (LuaConfig::CallManifestFetchCodeEx(appId, depotId, manifestGid, outRequestCode)) {
                 LOG_MANIFEST_INFO("Manifest gid={} resolved via fetch_manifest_code_ex", manifestGid);
@@ -251,6 +335,6 @@ namespace ManifestClient {
             LOG_MANIFEST_WARN("Manifest gid={} lua returned nil, falling back to config", manifestGid);
         }
 
-        return FetchActive(manifestGid, outRequestCode, appId, depotId);
+        return FetchFromProviders(manifestGid, outRequestCode, appId, depotId);
     }
 }

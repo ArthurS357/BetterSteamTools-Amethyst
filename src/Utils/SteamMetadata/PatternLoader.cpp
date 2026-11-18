@@ -346,9 +346,11 @@ void Revalidate(const RevalidationJob& job, bool enabled)
 
     // requireHttps (M-4): this path may replace a cache that is already trusted,
     // so a cleartext mirror (custom http:// url_template) is never used here.
+    // skipBody: jsDelivr leads the chain and may still serve the old file for
+    // hours after the repo fixed it; a copy of what we already have is skipped.
     const RemoteToml::RemoteBody remote = RemoteToml::FetchRemoteOnly(
         request, job.info.sha256, kRevalidateTimeoutMs, kRevalidateRecvTimeoutMs,
-        /*requireHttps=*/true);
+        /*requireHttps=*/true, /*skipBody=*/job.info.cachedBody);
     if (!remote.ok) {
         LOG_INFO("PatternLoader: {} revalidation: no mirror answered; keeping cache", job.info.component);
         return;
@@ -438,8 +440,8 @@ bool Load(OSTPlatform::DynamicLibrary::ModuleHandle module, const std::string& d
 
         // Self-heal a corrupt cache entry: a cached file that parses to nothing
         // would otherwise fail every launch until the user deleted it by hand.
-        // Treat it exactly like a cache miss (same synchronous mirror walk with
-        // the normal timeouts, same request) and overwrite it only with a body
+        // Treat it like a cache miss (same synchronous mirror walk with the
+        // cache-miss resolve/connect/recv budget, same request) and overwrite it only with a body
         // that parses. Gated by [remote] revalidate like the background check,
         // so revalidate = false restores the pre-v1.3.4 network behaviour exactly.
         if (map.empty() && r.fromCache && !r.cacheFallback && Config::GetRemoteRevalidate()) {

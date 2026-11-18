@@ -87,6 +87,14 @@
 # Memory.cpp so this binary does not pick up WriteExecutableByte's RWX
 # patching path (see the AV-heuristic note above).
 #
+# ManifestFailoverLogic.h (the provider chain, ~10 s budget and 5-minute circuit
+# breaker behind ManifestClient's failover, v1.5.0) is header-only: the clock and
+# the per-provider fetch are injected, so the test fakes both -- no network, no sleep.
+#
+# VersionPinLogic.h (the appmanifest reader and pin writer behind tools/version_pin,
+# v1.5.0) is header-only too. Its one write path reuses CompatAliasLogic's temp-and-
+# rename, which is compiled below, so the test also covers the on-disk behaviour.
+#
 # ManifestHookLogic.h (the decision predicates behind the hooks in
 # Hooks_Manifest.cpp, split out the same way) is header-only and constexpr --
 # <cstdint> only, so it needs no source file registered below.
@@ -159,6 +167,11 @@ add_executable(AmethystToolTests
     ugc_logic_test.cpp
     luaconfig_concurrency_test.cpp
     package_reconcile_logic_test.cpp
+    ipc_embedded_test.cpp
+    module_section_test.cpp
+    manifest_failover_logic_test.cpp
+    version_pin_logic_test.cpp
+    pattern_migrate_logic_test.cpp
 
     # Units under test, compiled directly (no OSTPlatform lib link) — see header.
     "${_ostp}/Numbers.cpp"
@@ -229,6 +242,12 @@ target_include_directories(AmethystToolTests PRIVATE
     ${_ostp}
     "${PROTO_GEN_DIR}"
     "${CMAKE_BINARY_DIR}/generated"
+)
+
+# ipc_embedded_test.cpp reads Hook/Hooks_IPC_ISteam*.cpp and Steam/IPCMessages.steamd to
+# keep IPCEmbedded::kEntries in step with the registered handlers and the IDL.
+target_compile_definitions(AmethystToolTests PRIVATE
+    AMETHYST_SRC_DIR="${CMAKE_CURRENT_SOURCE_DIR}/.."
 )
 
 # Both license_list_logic_test.cpp and this build's copy of LicenseListLogic.cpp

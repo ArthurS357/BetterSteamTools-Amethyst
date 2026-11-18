@@ -16,3 +16,18 @@ add_executable(extract_tickets
 )
 target_compile_features(extract_tickets PRIVATE cxx_std_20)
 
+
+# version_pin: offline game version pinning (v1.5.0). Reads appmanifest_<appid>.acf and
+# writes setManifestid calls for the installed depots. No injection, no hook, no network;
+# the logic is Utils/SteamMetadata/VersionPinLogic.h (unit-tested), and the atomic file
+# write is the one CompatAliasLogic already has.
+add_executable(version_pin
+    version_pin/version_pin.cpp
+    ../src/Utils/Config/CompatAliasLogic.cpp
+)
+target_include_directories(version_pin PRIVATE ../src)
+target_compile_features(version_pin PRIVATE cxx_std_20)
+if(MSVC)
+    # /w14062: a switch over an enum must name every case (the same flag src/CMakeLists.txt uses).
+    target_compile_options(version_pin PRIVATE /W4 /w14062 /permissive-)
+endif()

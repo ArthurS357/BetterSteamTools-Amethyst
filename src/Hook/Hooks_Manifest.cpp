@@ -1,6 +1,7 @@
 #include "Hooks_Manifest.h"
 #include "HookMacros.h"
 #include "Hook/ManifestHookLogic.h"
+#include "Hook/Hooks_Package.h"
 #include "dllmain.h"
 #include "Utils/Config/Config.h"
 #include "Utils/SteamMetadata/ManifestCache.h"
@@ -87,6 +88,31 @@ namespace {
             LOG_MANIFEST_WARN("BuildDepotDependency: app {} returned 0 depots "
                 "(appinfo mid-refresh) - failing the call so Steam keeps its "
                 "existing depot config instead of storing an empty one", AppId);
+#ifdef OPENSTEAMTOOL_LOGGING_ENABLED
+            // Diagnostics (log.level = "trace"): ownership state of the app and of
+            // the Lua ids just above it at the moment of the rejection. Lua gives
+            // no app -> depot map, so "depots" here are the next ids the Lua
+            // declares (depot ids usually follow the app id); a heuristic, log only.
+            const auto injected = [](AppId_t id) {
+                switch (Hooks_Package::GetInjectedState(id)) {
+                    case Hooks_Package::InjectedState::Present: return "yes";
+                    case Hooks_Package::InjectedState::Absent:  return "no";
+                    default:                                    return "license not ready";
+                }
+            };
+            LOG_MANIFEST_TRACE("BuildDepotDependency reject: app={} markedOwned={} inInjectedPkg={} "
+                               "sharedCount={}",
+                               AppId, !LuaConfig::HasDepot(AppId, true), injected(AppId),
+                               pSharedDepotInfo ? pSharedDepotInfo->m_Size : 0);
+            const auto pins = LuaConfig::GetManifestOverrides();   // snapshot copy
+            for (AppId_t id = AppId + 1; id <= AppId + 16; ++id) {
+                if (!LuaConfig::HasDepot(id, false)) continue;
+                LOG_MANIFEST_TRACE("BuildDepotDependency reject: app={} lua id={} markedOwned={} "
+                                   "inInjectedPkg={} manifestOverride={}",
+                                   AppId, id, !LuaConfig::HasDepot(id, true), injected(id),
+                                   pins.count(id) != 0);
+            }
+#endif
             return false;
         }
 

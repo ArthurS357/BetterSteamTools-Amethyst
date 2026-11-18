@@ -1,5 +1,57 @@
 # Changelog
 
+## [v1.5.0] - Unreleased
+
+Independence and stability. Scope and rationale: [docs/ROADMAP-v1.5.0.md](docs/ROADMAP-v1.5.0.md).
+
+### Added
+- **Embedded IPC spec.** The 6 IPC methods in use (`IClientUser` x4, `IClientUtils` x2) are compiled in (`Utils/SteamMetadata/IPCEmbedded.h`). `IPCLoader::Load` now tries the cache by SHA, then the embedded table, then the mirrors. The table is used only if all 12 `funcHash`/`fencepost` constants are found in the loaded `steamclient64.dll` `.text`; otherwise it falls through to the mirrors as before. A Steam update no longer triggers an IPC request when the table verifies.
+- **Manifest provider failover (`[manifest] failover`, on by default).** If the configured provider fails, the request code is fetched from the next one (`wudrm` then `steamrun`) within a ~10 s total budget (best effort; Steam's 12 s wait is the hard stop). A provider that gives no answer or answers 5xx is skipped for 5 minutes; a 404, a 429 or an unreadable answer only moves on to the next provider. A code of 0 is not an answer. A `url_template` override is never swapped for a built-in provider. `failover = false` restores the single-provider behaviour.
+
+- **`version_pin`, an offline tool that pins the installed version of a game** (`tools/version_pin`, logic in `Utils/SteamMetadata/VersionPinLogic.h`). It reads `steamapps\appmanifest_<appid>.acf`, takes the `InstalledDepots` manifests and writes `<appid>.pin.lua` with one `setManifestid` per depot into `config\stplug-in`. No hook, no network, not part of the DLL. `--appid <id>` or `--all` (one of the two is required, so running it with no arguments pins nothing), `--steam-dir` (default: registry), `--steamapps` for another library, `--out-dir`, `--dry-run`, `--force`. It never overwrites a file it did not write without `--force`, writes through a temp file and a rename, and warns when another `.lua` pins the same depot to a different manifest (the file parsed last wins). Only digits parsed as numbers and a filtered game name reach the `.lua`, because `.lua` files run as trusted code inside Steam.
+
+### Changed
+- `README.md`: `setManifestid`'s third argument was documented as an explicit size; the engine ignores it and always uses 0 (`LuaConfig.cpp`, `lua_setManifestid`).
+- `ManifestClient` no longer holds its mutex while it waits on the network or on a Lua `fetch_manifest_code*` call, so concurrent depot requests no longer queue behind each other.
+- `RemoteToml::Fetch` is split into `LoadCached` (hash plus cache read, no network) and `FetchOnMiss` (mirror walk). Behaviour is unchanged.
+- `IPCLoader::Load` takes the loaded steamclient module as a second argument (for the `.text` check). New `OSTPlatform::Memory::GetModuleSection` reads a PE section range from a loaded module.
+- A cached IPC TOML that does not parse, or lists no interface, now falls through to the embedded table and the mirrors instead of ending in the "IPC spec missing" popup.
+- **Pattern/IPC mirror chain leads with jsDelivr** (from upstream v1.0.9): jsDelivr madoiscool, then git.lua.tools, then GitHub raw madoiscool, then jsDelivr OpenSteam001, then GitHub raw OpenSteam001. Where `raw.githubusercontent.com` is unreachable it fails only after the connect timeout, and a cache miss runs before the hooks install. Upstream traced "invalid content configuration" to that window (~24 s there, because its loader was network-first). AmethystTool has been cache-first since v1.3.x, so only a cache miss (first launch after a Steam update) was exposed.
+- The cache-miss walk (`RemoteToml::FetchOnMiss`, loop now `RemoteTomlLogic::WalkMissMirrors`) uses 2.5 s resolve/connect and 5 s send/recv instead of the 5/5/10/10 s defaults. The corrupt-cache refetch uses the same budget. Not measured on a host with several IPs, where WinHTTP may retry the connect per address.
+- The background pattern revalidation skips a mirror that answers with the body already in the cache and tries the next one, so a jsDelivr copy that lags the repo cannot end the check (and start the 24 h throttle) before GitHub raw serves the fix.
+- Not taken from upstream v1.0.9: its detached refresh on every launch. It would send the DLL hash on every start and overwrite a working cache without the H-1/H-1b checks.
+
+### Privacy
+- With failover on, a manifest `gid` (and depot id for depot-aware providers) is sent to the next provider when the first one fails. Nothing extra is sent while the first provider answers. Set `failover = false` to opt out.
+- The embedded IPC table removes the IPC spec request (which carries the `steamclient64.dll` hash) on a Steam update, whenever the table verifies.
+- On a cache miss the DLL hash now goes to jsDelivr first instead of GitHub. Same data, different first recipient. No request is added to a launch with a healthy cache.
+
+### Tests
+- 519 to 525: `remote_toml_logic_test` checks that jsDelivr precedes GitHub raw for each repo and drives `WalkMissMirrors` through a fake network (unreachable GitHub raw, a repo that lacks the hash, everything down, empty chain), asserting every request gets the 2.5/2.5/5/5 s budget and what a dead host costs. Also in the Linux logic-test job, which was not run locally. The skip-identical-body path in `FetchRemoteOnly` has no unit test (WinHTTP).
+- 384 to 519. `version_pin_logic_test` (the VDF parser including every truncation of a real manifest, depot extraction, Lua output with hostile game names, conflict scan, and the write path on disk) and one test in `luaconfig_concurrency_test` that feeds the tool's output to the real `LuaConfig`. `version_pin_logic_test` is also in the Linux logic-test job (ASan + UBSan), which could not be run locally. Earlier in v1.5.0: `ipc_embedded_test` (verification on synthetic buffers; the table must match the registered handlers and the IDL), `module_section_test` (PE section lookup against the test binary and kernel32, plus forged-header cases on a synthetic image next to an unreadable page), `manifest_failover_logic_test` (chain, budget, timeout capping, retry rule, circuit breaker and the whole walk with a fake clock and fake providers). Windows suite only: not yet added to the Linux logic-test job, which could not be run locally.
+
+### Field test (2026-11-18, one Steam install, Debug build)
+- **Failover, Atomic Heart (668580):** the download started (`Downloading 162791 chunks for depot 668581`) with no `Access Denied`, where v1.3.x failed 13 times on 2026-10-27. Which provider answered is not known: `manifest.log` is rewritten at every Steam start and was overwritten by the next session.
+- **Undertale (391540), worked around:** `Failed building depot dependency (Invalid content configuration)`, produced by the `BuildDepotDependency` empty-list guard (14 rejections in 5 s, over 2 sessions).
+  - Ruled out: the `.lua` (3 depots with keys and `setManifestid`), the cached appinfo (has the 3 depots and the same gids, and was not being refreshed: `apps updated 0`), hook timing (hooks were in place 5 s before), and a real license owning the app without depots.
+  - The same app installed with 1 mounted depot on 2026-09-25, 10-08, 10-09 and 10-15. Since then both the DLL (pre-v1.3.3 to v1.5.0; no hook change after v1.4.0) and the Steam client (build 1794536281) changed.
+  - The guard's "appinfo mid-refresh" wording does not fit here: the list stays empty. Not changed: without the guard Steam records a "0 mounted depots" install, as on 2026-09-13/14.
+  - Trace run (00:24, v1.5.0 Debug, appmanifest deleted first): **installed** (`finished update, 1 mounted depots (BuildID 4279148) : 391541`). Every call for 391540 returned 1 depot, both those with `pSteamApp=0x0 pBuildId=0` and those with `pBuildId=4279148`, and the guard never fired. So calls with a null `pSteamApp` do not explain the empty list, and the guard was not changed.
+  - At 00:26, with the v1.4.0 DLL, Steam found the files missing, uninstalled, and the reinstall failed again with the same error. The failure is intermittent: v1.5.0 failed at 00:15 and 00:17 and worked at 00:24.
+  - Failing trace (00:31, v1.5.0): all 38 calls for 391540 returned 0 depots, including the install calls with a real `pSteamApp` and `pBuildId=4279148`. A retry 3 minutes into the same session failed the same way, so it is not a startup window: the empty list holds for the whole session. In that session other Lua apps (3357650, 4115450, 5072430) got their depots, so the injected license is not broken in general. Cause still open.
+  - Ownership trace (00:47, failing session, new trace logging): Steam answered 391540 and its depots 391541/391542/391544 exactly as it answered the Lua apps that got depots in the same session (3357650, 4115450, 5072430, 668580: `result=true pkg=4294967295 existInPkgs=0`, app `releaseState=4`, depots `releaseState=0`). All took the injected branch, and at the rejection the app and all 3 depots were in the injected package and not marked owned. Ownership is ruled out. The difference lies in how Steam builds the list from appinfo and the user config, which this DLL does not see.
+  - **Resolved by clearing Steam's app info cache (08:12, v1.5.0 Debug).** With `appcache\appinfo.vdf` and the appmanifest deleted, Steam found no cache (`failed to open file`) and fetched everything again.
+    - Access tokens: 51 of 53 granted. Every earlier session logged 73 requested, 0 received.
+    - The rebuilt cache held 462 apps; the old one held 1430.
+    - Undertale installed (`1 mounted depots ... 391541`) with no rejection: every call returned 1 depot.
+    - The EULA flag stayed `"391540_eula_0" "0"`, so the EULA is ruled out.
+  - Likely cause: stale local app info. This rests on a single run and was not reproduced; the 00:24 session also installed without clearing the cache.
+  - Workaround documented in the README (all three languages) under "Invalid content configuration when installing a Lua-added game". The guard is unchanged.
+- Trace logging added for this (Debug + `log.level = "trace"` only, compiled out in Release): Steam's own ownership answer per Lua id in `CheckAppOwnership`, and the ownership state of the app and of the Lua ids just above it when the guard rejects.
+
+### Planned for this release (not implemented yet)
+- **Shadow fingerprint recorder** and the offline `pattern_migrate` tool. Runtime migration is deferred to v1.5.1.
+
 ## [v1.4.0] - 2026-11-06
 
 ### Added

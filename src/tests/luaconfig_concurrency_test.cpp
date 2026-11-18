@@ -13,6 +13,7 @@
 #include "OSTPlatform/include/Http.h"
 #include "Utils/Config/LuaConfig.h"
 #include "Utils/SteamMetadata/StatsClient.h"
+#include "Utils/SteamMetadata/VersionPinLogic.h"
 #include "Utils/Tickets/AppTicket.h"
 
 #include <gtest/gtest.h>
@@ -378,4 +379,27 @@ TEST_F(LuaConfigConcurrency, StressReadersReloadersAndManifestCalls) {
     EXPECT_EQ(wrongCodes.load(), 0u);
     EXPECT_GT(reloads.load(), 0u);
     EXPECT_GT(manifestCalls.load(), 0u);
+}
+
+// v1.5.0: tools/version_pin writes this file and the engine must read it back. This
+// runs the REAL lua_setManifestid, which is the check that matters: it needs an
+// integer depot id and a gid made only of digits.
+TEST_F(LuaConfigConcurrency, VersionPinOutputLoadsAsManifestOverrides) {
+    VersionPinLogic::AppPins pins;
+    pins.appId = 7100;
+    pins.name = "Pin Test";
+    pins.depots = { { 7101, 5173085471687919135ull }, { 7102, 18446744073709551615ull } };
+
+    const std::string file = WriteLua("7100.pin.lua", VersionPinLogic::BuildPinLua(pins));
+    LuaConfig::ParseFile(file);
+
+    const auto overrides = LuaConfig::GetManifestOverrides();
+    ASSERT_EQ(overrides.count(7101), 1u);
+    ASSERT_EQ(overrides.count(7102), 1u);
+    EXPECT_EQ(overrides.at(7101).gid, 5173085471687919135ull);
+    EXPECT_EQ(overrides.at(7102).gid, 18446744073709551615ull);   // above 2^63: only exact as a quoted string
+    EXPECT_EQ(overrides.at(7101).size, 0u);                       // the engine forces the size to 0
+
+    // The engine state is process-wide: leave no override behind for other tests.
+    LuaConfig::UnloadFile(file);
 }
