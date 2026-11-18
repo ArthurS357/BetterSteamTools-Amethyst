@@ -171,6 +171,7 @@ add_executable(AmethystToolTests
     module_section_test.cpp
     manifest_failover_logic_test.cpp
     version_pin_logic_test.cpp
+    pattern_migrate_logic_test.cpp
 
     # Units under test, compiled directly (no OSTPlatform lib link) — see header.
     "${_ostp}/Numbers.cpp"
