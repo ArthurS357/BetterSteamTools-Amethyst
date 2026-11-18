@@ -37,7 +37,8 @@ Independence and stability. Scope and rationale: [docs/ROADMAP-v1.5.0.md](docs/R
   - The same app installed with 1 mounted depot on 2026-09-25, 10-08, 10-09 and 10-15. Since then both the DLL (pre-v1.3.3 to v1.5.0; no hook change after v1.4.0) and the Steam client (build 1794536281) changed.
   - The guard's "appinfo mid-refresh" wording does not fit here: the list stays empty. Not changed: without the guard Steam records a "0 mounted depots" install, as on 2026-09-13/14.
   - Trace run (00:24, v1.5.0 Debug, appmanifest deleted first): **installed** (`finished update, 1 mounted depots (BuildID 4279148) : 391541`). Every call for 391540 returned 1 depot, both those with `pSteamApp=0x0 pBuildId=0` and those with `pBuildId=4279148`, and the guard never fired. So calls with a null `pSteamApp` do not explain the empty list, and the guard was not changed.
-  - At 00:26, with the v1.4.0 DLL, Steam found the files missing, uninstalled, and the reinstall failed again with the same error. The failure is intermittent: v1.5.0 failed at 00:15 and 00:17 and worked at 00:24. A trace of a failing session is still missing.
+  - At 00:26, with the v1.4.0 DLL, Steam found the files missing, uninstalled, and the reinstall failed again with the same error. The failure is intermittent: v1.5.0 failed at 00:15 and 00:17 and worked at 00:24.
+  - Failing trace (00:31, v1.5.0): all 38 calls for 391540 returned 0 depots, including the install calls with a real `pSteamApp` and `pBuildId=4279148`. A retry 3 minutes into the same session failed the same way, so it is not a startup window: the empty list holds for the whole session. In that session other Lua apps (3357650, 4115450, 5072430) got their depots, so the injected license is not broken in general. Cause still open.
 
 ### Planned for this release (not implemented yet)
 - **Shadow fingerprint recorder** and the offline `pattern_migrate` tool. Runtime migration is deferred to v1.5.1.
