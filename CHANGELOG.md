@@ -32,7 +32,7 @@ Independence and stability. Scope and rationale: [docs/ROADMAP-v1.5.0.md](docs/R
 
 ### Field test (2026-11-18, one Steam install, Debug build)
 - **Failover, Atomic Heart (668580):** the download started (`Downloading 162791 chunks for depot 668581`) with no `Access Denied`, where v1.3.x failed 13 times on 2026-10-27. Which provider answered is not known: `manifest.log` is rewritten at every Steam start and was overwritten by the next session.
-- **Undertale (391540), not solved:** `Failed building depot dependency (Invalid content configuration)`, produced by the `BuildDepotDependency` empty-list guard (14 rejections in 5 s, over 2 sessions).
+- **Undertale (391540), worked around:** `Failed building depot dependency (Invalid content configuration)`, produced by the `BuildDepotDependency` empty-list guard (14 rejections in 5 s, over 2 sessions).
   - Ruled out: the `.lua` (3 depots with keys and `setManifestid`), the cached appinfo (has the 3 depots and the same gids, and was not being refreshed: `apps updated 0`), hook timing (hooks were in place 5 s before), and a real license owning the app without depots.
   - The same app installed with 1 mounted depot on 2026-09-25, 10-08, 10-09 and 10-15. Since then both the DLL (pre-v1.3.3 to v1.5.0; no hook change after v1.4.0) and the Steam client (build 1794536281) changed.
   - The guard's "appinfo mid-refresh" wording does not fit here: the list stays empty. Not changed: without the guard Steam records a "0 mounted depots" install, as on 2026-09-13/14.
@@ -40,6 +40,13 @@ Independence and stability. Scope and rationale: [docs/ROADMAP-v1.5.0.md](docs/R
   - At 00:26, with the v1.4.0 DLL, Steam found the files missing, uninstalled, and the reinstall failed again with the same error. The failure is intermittent: v1.5.0 failed at 00:15 and 00:17 and worked at 00:24.
   - Failing trace (00:31, v1.5.0): all 38 calls for 391540 returned 0 depots, including the install calls with a real `pSteamApp` and `pBuildId=4279148`. A retry 3 minutes into the same session failed the same way, so it is not a startup window: the empty list holds for the whole session. In that session other Lua apps (3357650, 4115450, 5072430) got their depots, so the injected license is not broken in general. Cause still open.
   - Ownership trace (00:47, failing session, new trace logging): Steam answered 391540 and its depots 391541/391542/391544 exactly as it answered the Lua apps that got depots in the same session (3357650, 4115450, 5072430, 668580: `result=true pkg=4294967295 existInPkgs=0`, app `releaseState=4`, depots `releaseState=0`). All took the injected branch, and at the rejection the app and all 3 depots were in the injected package and not marked owned. Ownership is ruled out. The difference lies in how Steam builds the list from appinfo and the user config, which this DLL does not see.
+  - **Resolved by clearing Steam's app info cache (08:12, v1.5.0 Debug).** With `appcache\appinfo.vdf` and the appmanifest deleted, Steam found no cache (`failed to open file`) and fetched everything again.
+    - Access tokens: 51 of 53 granted. Every earlier session logged 73 requested, 0 received.
+    - The rebuilt cache held 462 apps; the old one held 1430.
+    - Undertale installed (`1 mounted depots ... 391541`) with no rejection: every call returned 1 depot.
+    - The EULA flag stayed `"391540_eula_0" "0"`, so the EULA is ruled out.
+  - Likely cause: stale local app info. This rests on a single run and was not reproduced; the 00:24 session also installed without clearing the cache.
+  - Workaround documented in the README (all three languages) under "Invalid content configuration when installing a Lua-added game". The guard is unchanged.
 - Trace logging added for this (Debug + `log.level = "trace"` only, compiled out in Release): Steam's own ownership answer per Lua id in `CheckAppOwnership`, and the ownership state of the app and of the Lua ids just above it when the guard rejects.
 
 ### Planned for this release (not implemented yet)

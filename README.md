@@ -436,6 +436,25 @@ Debug builds write per-module log files under `<Steam>/amethysttool/`:
 
 The log level is controlled by `[log] level` in `amethysttool.toml`.
 
+### "Invalid content configuration" when installing a Lua-added game
+
+Steam builds a list of the game's depots before every install or update. When that list comes back empty for a Lua-added game, AmethystTool fails the call on purpose. Steam then shows **Invalid content configuration** (`Failed building depot dependency` in `<Steam>\logs\content_log.txt`). Letting the empty list through would be worse: Steam would mark the game installed with nothing downloaded ("0 mounted depots").
+
+The empty list comes from Steam's local state, not from the `.lua`. In the case that was traced (Undertale, 391540, November 2026), the list stayed empty for whole Steam sessions. Steam reported the same ownership for that game and its depots as for games that installed. Deleting Steam's app info cache fixed it on the first try.
+
+1. Exit Steam completely (tray icon → Exit).
+2. Delete the app info cache and the game's app manifest (here with a backup of the cache):
+   ```powershell
+   Copy-Item 'C:\Program Files (x86)\Steam\appcache\appinfo.vdf' 'C:\Program Files (x86)\Steam\appcache\appinfo.vdf.bak'
+   Remove-Item 'C:\Program Files (x86)\Steam\appcache\appinfo.vdf'
+   Remove-Item 'C:\Program Files (x86)\Steam\steamapps\appmanifest_<appid>.acf' -ErrorAction SilentlyContinue
+   ```
+3. Start Steam. The first start takes longer while Steam downloads app info again.
+4. Install the game.
+5. If it still fails, exit Steam, start it again and retry. A plain restart has also worked, but only once in six attempts.
+
+Do not put the old `appinfo.vdf` back afterwards: it brings the stale state back. Steam rebuilds the file on its own. In a Debug build, `manifest.log` shows `BuildDepotDependency: app <appid> returned 0 depots` for each rejected call.
+
 ## Antivirus and SmartScreen
 
 AmethystTool works by loading into Steam and installing in-process hooks (via Microsoft Detours). These are exactly the techniques antivirus heuristics look for, so **an unsigned build will very likely be flagged or quarantined** — this is a false positive inherent to the technique, not evidence of malware. Kaspersky, Defender, and others have been observed quarantining the freshly built DLLs.

@@ -310,6 +310,25 @@ url_template = "https://your.server/{channel}/{component}/{sha256}.toml"
 
 日志级别由 `amethysttool.toml` 中的 `[log] level` 控制
 
+### 安装通过 Lua 添加的游戏时出现"内容配置无效"
+
+每次安装或更新前，Steam 都会生成该游戏的 depot 列表。如果某个通过 Lua 添加的游戏得到的列表为空，AmethystTool 会有意让这次调用失败，Steam 随即显示 **内容配置无效**（`<Steam>\logs\content_log.txt` 中为 `Failed building depot dependency`）。放行空列表会更糟：Steam 会把游戏标记为已安装，却什么也没下载（"0 mounted depots"）
+
+空列表来自 Steam 的本地状态，而不是 `.lua`。在已追踪的案例中（Undertale，391540，2026 年 11 月），列表在整个 Steam 会话期间一直为空；Steam 对该游戏及其 depot 报告的所有权与能正常安装的游戏相同。删除 Steam 的应用信息缓存后，第一次尝试就解决了
+
+1. 完全退出 Steam（托盘图标 → 退出）
+2. 删除应用信息缓存和该游戏的 app manifest（这里先备份缓存）：
+   ```powershell
+   Copy-Item 'C:\Program Files (x86)\Steam\appcache\appinfo.vdf' 'C:\Program Files (x86)\Steam\appcache\appinfo.vdf.bak'
+   Remove-Item 'C:\Program Files (x86)\Steam\appcache\appinfo.vdf'
+   Remove-Item 'C:\Program Files (x86)\Steam\steamapps\appmanifest_<appid>.acf' -ErrorAction SilentlyContinue
+   ```
+3. 启动 Steam。第一次启动会慢一些，因为 Steam 要重新下载应用信息
+4. 安装游戏
+5. 如果仍然失败，退出 Steam、重新启动后再试。单纯重启也成功过，但六次里只有一次
+
+之后不要把旧的 `appinfo.vdf` 放回去：那会把过期状态带回来。Steam 会自行重建该文件。在 Debug 版本中，每次被拒绝的调用都会在 `manifest.log` 中显示 `BuildDepotDependency: app <appid> returned 0 depots`
+
 ## 杀毒软件与 SmartScreen
 
 AmethystTool 的工作方式是加载进 Steam 并在进程内安装 hook（通过 Microsoft Detours）。这正是杀毒软件启发式所查找的技术，因此**未签名的构建很可能被标记或隔离**——这是该技术固有的误报，而非恶意软件的证据。已观察到 Kaspersky、Defender 等会隔离刚构建出的 DLL。

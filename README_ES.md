@@ -303,6 +303,25 @@ Las compilaciones de depuración (Debug) escriben archivos de registro independi
 
 El nivel de registro se controla mediante `[log] level` en `amethysttool.toml`.
 
+### "Configuración de contenido no válida" al instalar un juego añadido por Lua
+
+Antes de cada instalación o actualización, Steam arma la lista de depots del juego. Si esa lista sale vacía para un juego añadido por Lua, AmethystTool hace fallar la llamada a propósito. Steam muestra entonces **Configuración de contenido no válida** (`Failed building depot dependency` en `<Steam>\logs\content_log.txt`). Dejar pasar la lista vacía sería peor: Steam marcaría el juego como instalado sin descargar nada ("0 mounted depots").
+
+La lista vacía viene del estado local de Steam, no del `.lua`. En el caso investigado (Undertale, 391540, noviembre de 2026), la lista quedó vacía durante sesiones enteras de Steam. Steam informaba la misma propiedad para ese juego y sus depots que para los juegos que sí se instalaron. Borrar la caché de información de apps de Steam lo resolvió al primer intento.
+
+1. Cierra Steam por completo (icono de la bandeja → Salir).
+2. Borra la caché de información de apps y el manifiesto del juego (aquí con copia de la caché):
+   ```powershell
+   Copy-Item 'C:\Program Files (x86)\Steam\appcache\appinfo.vdf' 'C:\Program Files (x86)\Steam\appcache\appinfo.vdf.bak'
+   Remove-Item 'C:\Program Files (x86)\Steam\appcache\appinfo.vdf'
+   Remove-Item 'C:\Program Files (x86)\Steam\steamapps\appmanifest_<appid>.acf' -ErrorAction SilentlyContinue
+   ```
+3. Abre Steam. El primer inicio tarda más mientras Steam vuelve a descargar la información de las apps.
+4. Instala el juego.
+5. Si sigue fallando, cierra Steam, ábrelo de nuevo y reintenta. Solo reiniciar también funcionó, pero una vez en seis intentos.
+
+No vuelvas a poner el `appinfo.vdf` antiguo después: trae de vuelta el estado viejo. Steam reconstruye el archivo por sí mismo. En una compilación Debug, `manifest.log` muestra `BuildDepotDependency: app <appid> returned 0 depots` por cada llamada rechazada.
+
 ## Antivirus y SmartScreen
 
 AmethystTool funciona cargándose dentro de Steam e instalando hooks en el proceso (mediante Microsoft Detours). Estas son exactamente las técnicas que buscan las heurísticas de los antivirus, así que **es muy probable que una compilación sin firmar sea marcada o puesta en cuarentena** — se trata de un falso positivo inherente a la técnica, no de una prueba de malware. Se ha observado que Kaspersky, Defender y otros ponen en cuarentena las DLL recién compiladas.
