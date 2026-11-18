@@ -4,6 +4,7 @@
 // arrays standing in for .text and .pdata; no Windows API, no real Steam DLL.
 
 #include "Utils/SteamMetadata/PatternMigrateLogic.h"
+#include "synthetic_image.h"
 
 #include <gtest/gtest.h>
 
@@ -13,85 +14,10 @@
 #include <vector>
 
 using namespace PatternMigrateLogic;
+using namespace SyntheticImage;
 
 namespace {
 
-    using Bytes = std::vector<std::uint8_t>;
-
-    constexpr std::uint32_t kTextRva = 0x1000;
-
-    void Put32(Bytes& b, std::size_t off, std::uint32_t v) {
-        for (std::size_t i = 0; i < 4; ++i)
-            b[off + i] = static_cast<std::uint8_t>(v >> (8 * i));
-    }
-
-    // ── a synthetic function ─────────────────────────────────────────
-    //
-    //   0  48 89 5C 24 08        mov [rsp+8], rbx
-    //   5  48 89 74 24 10        mov [rsp+10h], rsi
-    //  10  57                    push rdi
-    //  11  48 83 EC 20           sub rsp, 20h
-    //  15  B8 <seed>             mov eax, seed          (imm32 at 16, fixed)
-    //  20  E8 <rel32>            call ...               (rel32 at 21, wildcard)
-    //  25  48 8B 05 <disp32>     mov rax, [rip+disp]    (disp32 at 28, wildcard)
-    //  32  85 C0                 test eax, eax
-    //  34  74 02                 jz +2
-    //  36  90 x30                nop padding            -> head = 66 bytes
-    //  66  90 x(size-67), C3     tail                   -> size = 66 + tail + 1
-    //
-    // The first 64 bytes are the fingerprint prefix; 8 of them are wildcards.
-    constexpr std::size_t kCallOff = 20;
-    constexpr std::size_t kRipDispOff = 28;
-    constexpr std::size_t kHeadLen = 66;
-
-    Bytes Func(std::uint32_t seed, std::size_t size) {
-        Bytes b = { 0x48, 0x89, 0x5C, 0x24, 0x08,
-                    0x48, 0x89, 0x74, 0x24, 0x10,
-                    0x57,
-                    0x48, 0x83, 0xEC, 0x20,
-                    0xB8, 0, 0, 0, 0,
-                    0xE8, 0, 0, 0, 0,
-                    0x48, 0x8B, 0x05, 0, 0, 0, 0,
-                    0x85, 0xC0,
-                    0x74, 0x02 };
-        Put32(b, 16, seed);
-        b.resize(size, 0x90);
-        b[size - 1] = 0xC3;
-        return b;
-    }
-
-    struct Img {
-        Bytes text;
-        std::vector<RuntimeFunction> pdata;
-
-        // Places `code` at the next 16-byte boundary (int3 padding between functions)
-        // and, unless told otherwise, gives it a .pdata entry covering exactly it.
-        std::uint32_t Add(const Bytes& code, bool inPdata = true) {
-            while (text.size() % 16 != 0) text.push_back(0xCC);
-            const std::uint32_t rva = kTextRva + static_cast<std::uint32_t>(text.size());
-            text.insert(text.end(), code.begin(), code.end());
-            if (inPdata)
-                pdata.push_back({ rva, rva + static_cast<std::uint32_t>(code.size()) });
-            return rva;
-        }
-
-        void PatchCall(std::uint32_t funcRva, std::uint32_t target) {
-            const std::size_t off = funcRva - kTextRva + kCallOff + 1;
-            Put32(text, off, target - (funcRva + static_cast<std::uint32_t>(kCallOff) + 5));
-        }
-
-        void PatchRip(std::uint32_t funcRva, std::uint32_t disp) {
-            Put32(text, funcRva - kTextRva + kRipDispOff, disp);
-        }
-
-        ImageView View() const {
-            ImageView v;
-            v.textRva = kTextRva;
-            v.text = std::span<const std::uint8_t>(text);
-            v.pdata = pdata;
-            return v;
-        }
-    };
 
     constexpr std::uint32_t kSeedF = 0xF0F0F0F0;
     constexpr std::uint32_t kSeedA = 0xA0A0A0A0;

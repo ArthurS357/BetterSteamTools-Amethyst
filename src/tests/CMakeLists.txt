@@ -172,6 +172,8 @@ add_executable(AmethystToolTests
     manifest_failover_logic_test.cpp
     version_pin_logic_test.cpp
     pattern_migrate_logic_test.cpp
+    pattern_recorder_logic_test.cpp
+    pattern_recorder_test.cpp
 
     # Units under test, compiled directly (no OSTPlatform lib link) — see header.
     "${_ostp}/Numbers.cpp"
@@ -196,6 +198,8 @@ add_executable(AmethystToolTests
     # ManifestCache's file/negative-cache/validation logic, split out so it
     # compiles here without OSTPlatform::Http/DynamicLibrary or Config.
     "${CMAKE_CURRENT_SOURCE_DIR}/../Utils/SteamMetadata/ManifestCacheLogic.cpp"
+    # Shadow-mode recorder's disk side: std::filesystem + the pure logic only (no Log, no Config).
+    "${CMAKE_CURRENT_SOURCE_DIR}/../Utils/SteamMetadata/PatternRecorder.cpp"
     # [donate] TOML parsing/clamping, split out of Config.cpp so it compiles
     # here without Lua/LuaConfig, WinHTTP, or spdlog (see header comment above).
     "${CMAKE_CURRENT_SOURCE_DIR}/../Utils/Config/DonateConfigLogic.cpp"
