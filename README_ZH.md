@@ -257,11 +257,10 @@ AmethystTool 不再在 DLL 中内置字节模式签名。相反，每次启动�
 
 1. **本地缓存** — `<Steam>\amethysttool\pattern\<subdir>\<sha256>.toml`。文件以 DLL 的精确 SHA-256 命名，因此缓存条目直接使用，不发出任何请求。仅在缓存未命中时（通常是 Steam 更新后的首次启动）才访问网络
 2. **镜像链**（仅缓存未命中时），按顺序尝试，直到某个返回 HTTP 200：
-   1. [`madoiscool/steam-monitor`](https://github.com/madoiscool/steam-monitor) — 先 GitHub raw，再 jsDelivr。排在首位，因为它是仍在积极维护的跟踪器
-   2. [`OpenSteam001/steam-monitor`](https://github.com/OpenSteam001/steam-monitor) — 先 GitHub raw，再 jsDelivr。作为备用保留；其 `pattern` 分支自 2026-09-06 起没有新提交
-   3. `git.lua.tools/luatools/steam-monitor`
+   1. [`madoiscool/steam-monitor`](https://github.com/madoiscool/steam-monitor) — 先 jsDelivr，再 `git.lua.tools/luatools/steam-monitor`，最后 GitHub raw。排在首位，因为它是仍在积极维护的跟踪器
+   2. [`OpenSteam001/steam-monitor`](https://github.com/OpenSteam001/steam-monitor) — 先 jsDelivr，再 GitHub raw。作为备用保留；其 `pattern` 分支自 2026-09-06 起没有新提交
 
-   在 `raw.githubusercontent.com` 被封锁的地区（如中国大陆），jsDelivr 很有用。成功获取的内容会写入缓存
+   jsDelivr 排在 GitHub raw 之前，因为部分网络（如中国大陆）无法访问 `raw.githubusercontent.com`，而缓存未命中时的下载发生在钩子安装之前。每个镜像的解析和连接各有 2.5 秒超时。成功获取的内容会写入缓存
 
 IPC 规格弹窗（`ipc` 通道）指向仍在积极维护的镜像：<https://github.com/madoiscool/steam-monitor/tree/ipc/steamclient>。
 
@@ -356,7 +355,7 @@ Windows SmartScreen 可能在首次运行时发出警告，因为这些二进制
 - 带有 MSVC（x64 工具链）的 Visual Studio 2022
 
 ### 运行时要求
-- Steam 更新后首次启动需要访问 `raw.githubusercontent.com` 的出站 HTTPS（参见 [Steam 版本兼容性](#steam-版本兼容性)）。之后会缓存
+- Steam 更新后首次启动需要访问 `cdn.jsdelivr.net`（或镜像链中的其他镜像）的出站 HTTPS（参见 [Steam 版本兼容性](#steam-版本兼容性)）。之后会缓存
 
 ### 快速构建
 ```powershell

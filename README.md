@@ -370,11 +370,10 @@ Lookup order:
 
 1. **Local cache** — `<Steam>\amethysttool\pattern\<subdir>\<sha256>.toml`. A file is keyed by the DLL's exact SHA-256, so a cached entry is used as-is and no request is made. The network is only touched on a cache miss (typically the first launch after a Steam update).
 2. **Mirror chain** (cache miss only), tried in order until one returns HTTP 200:
-   1. [`madoiscool/steam-monitor`](https://github.com/madoiscool/steam-monitor) — GitHub raw, then jsDelivr. First because it is the actively maintained tracker.
-   2. [`OpenSteam001/steam-monitor`](https://github.com/OpenSteam001/steam-monitor) — GitHub raw, then jsDelivr. Kept as a fallback; its `pattern` branch has had no commit since 2026-09-06.
-   3. `git.lua.tools/luatools/steam-monitor`.
+   1. [`madoiscool/steam-monitor`](https://github.com/madoiscool/steam-monitor) — jsDelivr, then `git.lua.tools/luatools/steam-monitor`, then GitHub raw. First because it is the actively maintained tracker.
+   2. [`OpenSteam001/steam-monitor`](https://github.com/OpenSteam001/steam-monitor) — jsDelivr, then GitHub raw. Kept as a fallback; its `pattern` branch has had no commit since 2026-09-06.
 
-   jsDelivr helps in regions where `raw.githubusercontent.com` is blocked (e.g. mainland China). The successful body is written to the cache.
+   jsDelivr comes before GitHub raw because `raw.githubusercontent.com` is unreachable on some networks (e.g. mainland China), and a miss runs before the hooks install. Each mirror gets 2.5 s to resolve and 2.5 s to connect. The successful body is written to the cache.
 
 Mirrors are independent repos with different coverage, so a **404** on one does not stop the loop — the next mirror is tried. If every mirror fails, a one-shot popup appears with the unmatched DLL name, its SHA-256, the expected cache path, and the upstream URL. Only the hooks tied to that DLL are disabled — the rest of AmethystTool keeps working.
 
@@ -482,7 +481,7 @@ Only exclude files you built or trust. If you would rather not weaken your prote
 - CMake 3.25+ and Ninja, if not already provided by the VS component above
 
 ### Runtime requirements
-- Outbound HTTPS access to `raw.githubusercontent.com` on first launch after a Steam update (see [Steam version compatibility](#steam-version-compatibility)). Cached afterwards.
+- Outbound HTTPS access to `cdn.jsdelivr.net` (or another mirror in the chain) on first launch after a Steam update (see [Steam version compatibility](#steam-version-compatibility)). Cached afterwards.
 
 ### Quick build
 ```powershell

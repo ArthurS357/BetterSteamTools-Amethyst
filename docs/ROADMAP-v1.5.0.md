@@ -75,6 +75,16 @@ prepares the data needed to migrate patterns safely in v1.5.1.
 - Both share one pure engine, unit-tested like `PatternRefreshLogic.h`.
 - Runtime migration waits for v1.5.1 and for data from at least two Steam updates.
 
+### Outside the pillars: cache-miss mirror order (from upstream v1.0.9, implemented)
+
+- Upstream v1.0.9 fixed "invalid content configuration" on networks without GitHub raw: its `RemoteToml::Fetch` was
+  network-first, so hooks installed ~24 s after Steam start. The fork has been cache-first since v1.3.x, so only the
+  cache miss (first launch after a Steam update) had that window.
+- Taken: jsDelivr before GitHub raw for each repo, and 2.5 s resolve/connect, 5 s send/recv on the miss walk.
+- Not taken: upstream's detached refresh on every launch. It sends the DLL hash on every start and overwrites a working
+  cache without the H-1/H-1b checks. The throttled, validated revalidation in `PatternRefreshLogic.h` stays.
+- Limit: if no mirror answers and there is no cache, a miss can still take ~5 s per mirror per component.
+
 ## Evidence behind the scope
 
 Measured on one Steam install (steamclient64.dll build of 2026-10-21) against three cached TOMLs. One sample, so treat it as

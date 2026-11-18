@@ -250,11 +250,10 @@ Orden de búsqueda:
 
 1. **Caché local** — `<Steam>\amethysttool\pattern\<subdir>\<sha256>.toml`. Cada archivo está indexado por el SHA-256 exacto de la DLL, así que una entrada en caché se usa tal cual y no se hace ninguna solicitud. La red solo se consulta cuando no hay caché (normalmente el primer inicio tras una actualización de Steam).
 2. **Cadena de espejos** (solo sin caché), probados en orden hasta que uno devuelva HTTP 200:
-   1. [`madoiscool/steam-monitor`](https://github.com/madoiscool/steam-monitor) — GitHub raw y luego jsDelivr. Va primero porque es el rastreador mantenido activamente.
-   2. [`OpenSteam001/steam-monitor`](https://github.com/OpenSteam001/steam-monitor) — GitHub raw y luego jsDelivr. Se mantiene como respaldo; su rama `pattern` no recibe commits desde el 2026-09-06.
-   3. `git.lua.tools/luatools/steam-monitor`.
+   1. [`madoiscool/steam-monitor`](https://github.com/madoiscool/steam-monitor) — jsDelivr, luego `git.lua.tools/luatools/steam-monitor` y luego GitHub raw. Va primero porque es el rastreador mantenido activamente.
+   2. [`OpenSteam001/steam-monitor`](https://github.com/OpenSteam001/steam-monitor) — jsDelivr y luego GitHub raw. Se mantiene como respaldo; su rama `pattern` no recibe commits desde el 2026-09-06.
 
-   jsDelivr ayuda en regiones donde `raw.githubusercontent.com` está bloqueado (por ejemplo, China continental). El cuerpo obtenido se guarda en la caché.
+   jsDelivr va antes que GitHub raw porque `raw.githubusercontent.com` no es accesible en algunas redes (por ejemplo, China continental), y la búsqueda sin caché ocurre antes de instalar los hooks. Cada espejo tiene 2,5 s para resolver y 2,5 s para conectar. El cuerpo obtenido se guarda en la caché.
 
 El popup de especificación IPC (canal `ipc`) apunta al espejo mantenido activamente: <https://github.com/madoiscool/steam-monitor/tree/ipc/steamclient>.
 
@@ -349,7 +348,7 @@ Excluye solo archivos que hayas compilado o en los que confíes. Si prefieres no
 - Visual Studio 2022 with MSVC (x64 toolchain)
 
 ### Requisitos de ejecución
-- Acceso HTTPS saliente a `raw.githubusercontent.com` en el primer inicio tras una actualización de Steam (ver [Compatibilidad con versiones de Steam](#steam-version-compatibility)). Posteriormente se almacena en caché.
+- Acceso HTTPS saliente a `cdn.jsdelivr.net` (u otro espejo de la cadena) en el primer inicio tras una actualización de Steam (ver [Compatibilidad con versiones de Steam](#steam-version-compatibility)). Posteriormente se almacena en caché.
 
 ### Compilación rápida
 ```powershell
