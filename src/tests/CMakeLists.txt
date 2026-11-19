@@ -167,6 +167,7 @@ add_executable(AmethystToolTests
     ugc_logic_test.cpp
     luaconfig_concurrency_test.cpp
     package_reconcile_logic_test.cpp
+    pics_diagnostics_logic_test.cpp
     ipc_embedded_test.cpp
     module_section_test.cpp
     manifest_failover_logic_test.cpp

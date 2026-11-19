@@ -9,6 +9,7 @@
 #include "HookMacros.h"
 #include "Hook/LicenseListLogic.h"
 #include "Hook/NetPacketLogic.h"
+#include "Hook/PicsDiagnosticsLogic.h"
 #include "Hook/AchievementsLogic.h"
 #include "Hook/RichPresenceLogic.h"
 #include "OSTPlatform/include/Memory.h"
@@ -138,6 +139,108 @@ namespace {
 // ════════════════════════════════════════════════════════════════
 namespace Hooks_NetPacket_AccessToken {
 
+#ifdef OPENSTEAMTOOL_LOGGING_ENABLED
+    // Diagnostics only (Debug builds): whether the last request that asked for a lua app
+    // carried an access token, so the reply can be read against it. Written by the send hook,
+    // read by the recv hook, which run on different threads. Bounded by the number of lua apps.
+    namespace {
+        std::mutex g_sentMutex;
+        std::unordered_map<AppId_t, bool> g_sentHadToken;
+
+        void RecordSent(const CMsgClientPICSProductInfoRequest& req) {
+            std::vector<std::pair<AppId_t, bool>> luaApps;
+            for (const auto& app : req.apps())
+                if (LuaConfig::HasDepot(app.appid()))
+                    luaApps.emplace_back(app.appid(), app.access_token() != 0);
+            std::lock_guard<std::mutex> lock(g_sentMutex);
+            for (const auto& [id, hadToken] : luaApps) g_sentHadToken[id] = hadToken;
+        }
+
+        bool SentHadToken(AppId_t id) {
+            std::lock_guard<std::mutex> lock(g_sentMutex);
+            const auto it = g_sentHadToken.find(id);
+            return it != g_sentHadToken.end() && it->second;
+        }
+    }
+#endif
+
+    // CMsgClientPICSProductInfoResponse (8904): observation only, never changes the reply.
+    // Debug builds only; Release does not even parse it.
+    void HandleRecvProductInfo(const uint8* pBody, uint32 cbBody)
+    {
+#ifdef OPENSTEAMTOOL_LOGGING_ENABLED
+        CMsgClientPICSProductInfoResponse resp;
+        if (!resp.ParseFromArray(pBody, cbBody)) {
+            LOG_PICS_WARN("CMsgClientPICSProductInfoResponse: failed to parse ({} bytes)", cbBody);
+            return;
+        }
+
+        size_t missingToken = 0, luaApps = 0, luaEmpty = 0, totalBuffer = 0;
+        for (const auto& app : resp.apps()) {
+            totalBuffer += app.buffer().size();
+            if (app.missing_token()) ++missingToken;
+
+            PicsDiagnosticsLogic::AppSummary s;
+            s.appId        = app.appid();
+            s.luaApp       = LuaConfig::HasDepot(app.appid());
+            s.missingToken = app.missing_token();
+            s.bufferBytes  = app.buffer().size();
+            if (!s.luaApp) continue;
+
+            ++luaApps;
+            s.tokenSent = SentHadToken(app.appid());
+            s.depots    = PicsDiagnosticsLogic::CountAppInfoDepots(app.buffer());
+            LOG_PICS_TRACE("PICS reply app={} token_sent={} missing_token={} only_public={} change={} "
+                           "buffer={}B depots={}",
+                           s.appId, s.tokenSent, s.missingToken, app.only_public(), app.change_number(),
+                           s.bufferBytes, s.depots ? std::to_string(*s.depots) : std::string("n/a"));
+            if (PicsDiagnosticsLogic::LuaAppCameBackEmpty(s)) {
+                ++luaEmpty;
+                LOG_PICS_WARN("PICS: lua app {} came back with no depots (token_sent={} missing_token={} "
+                              "buffer={}B). Check that its .lua has addtoken.",
+                              s.appId, s.tokenSent, s.missingToken, s.bufferBytes);
+            }
+        }
+
+        for (const uint32 id : resp.unknown_appids()) {
+            if (!LuaConfig::HasDepot(id)) continue;
+            LOG_PICS_WARN("PICS: lua app {} is in unknown_appids (token_sent={}). Server has no appinfo for it.",
+                          id, SentHadToken(id));
+        }
+
+        LOG_PICS_DEBUG("CMsgClientPICSProductInfoResponse: apps={} unknown={} missing_token={} lua_apps={} "
+                       "lua_empty={} buffers={}B pending={} meta_only={} http_host={}",
+                       resp.apps_size(), resp.unknown_appids_size(), missingToken, luaApps, luaEmpty,
+                       totalBuffer, resp.response_pending(), resp.meta_data_only(),
+                       resp.has_http_host() ? resp.http_host() : std::string("-"));
+#else
+        (void)pBody; (void)cbBody;
+#endif
+    }
+
+    // CMsgClientPICSAccessTokenResponse (8906): which apps the server granted a token for and
+    // which it denied. Observation only, Debug builds only.
+    void HandleRecvAccessTokens(const uint8* pBody, uint32 cbBody)
+    {
+#ifdef OPENSTEAMTOOL_LOGGING_ENABLED
+        CMsgClientPICSAccessTokenResponse resp;
+        if (!resp.ParseFromArray(pBody, cbBody)) {
+            LOG_PICS_WARN("CMsgClientPICSAccessTokenResponse: failed to parse ({} bytes)", cbBody);
+            return;
+        }
+        for (const auto& t : resp.app_access_tokens())
+            if (LuaConfig::HasDepot(t.appid()))
+                LOG_PICS_TRACE("PICS token reply: lua app {} granted a token", t.appid());
+        for (const uint32 id : resp.app_denied_tokens())
+            if (LuaConfig::HasDepot(id))
+                LOG_PICS_WARN("PICS token reply: lua app {} was DENIED a token", id);
+        LOG_PICS_DEBUG("CMsgClientPICSAccessTokenResponse: granted={} denied={}",
+                       resp.app_access_tokens_size(), resp.app_denied_tokens_size());
+#else
+        (void)pBody; (void)cbBody;
+#endif
+    }
+
     bool HandleSend(const uint8* pBody, uint32 cbBody)
     {
         CMsgClientPICSProductInfoRequest req;
@@ -157,6 +260,9 @@ namespace Hooks_NetPacket_AccessToken {
         }
         if (!needsPatch) {
             LOG_PICS_TRACE("CMsgClientPICSProductInfoRequest: no apps need token injection, skip");
+#ifdef OPENSTEAMTOOL_LOGGING_ENABLED
+            RecordSent(req);
+#endif
             return false;
         }
 
@@ -192,6 +298,9 @@ namespace Hooks_NetPacket_AccessToken {
         }
 
         LOG_PICS_DEBUG("CMsgClientPICSProductInfoRequest: modified body: {}", req.DebugString());
+#ifdef OPENSTEAMTOOL_LOGGING_ENABLED
+        RecordSent(req);
+#endif
         return true;
     }
 
@@ -2131,6 +2240,14 @@ namespace {
         // case k_EMsgClientRequestEncryptedAppTicketResponse:     // 5527
         //     Hooks_NetPacket_ETicket::HandleEncryptedAppTicketResponse(pBody, cbBody);
         //     return;
+
+        case k_EMsgClientPICSProductInfoResponse:  // 8904, diagnostics only
+            Hooks_NetPacket_AccessToken::HandleRecvProductInfo(pBody, cbBody);
+            return;
+
+        case k_EMsgClientPICSAccessTokenResponse:  // 8906, diagnostics only
+            Hooks_NetPacket_AccessToken::HandleRecvAccessTokens(pBody, cbBody);
+            return;
 
         case k_EMsgClientGetUserStatsResponse:     // 819
             g_NeedReplaceBody = Hooks_NetPacket_UserStats::HandleRecv_ClientGetUserStatsResponse(

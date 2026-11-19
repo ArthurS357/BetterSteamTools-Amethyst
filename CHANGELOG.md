@@ -1,5 +1,14 @@
 # Changelog
 
+## [v1.5.1] - Unreleased
+
+### Added (diagnostics only, Debug builds)
+- **PICS reply logging** (`pics.log`), to check why a lua app can come back with 0 depots ("Invalid content configuration"). Field test 2026-11-19 (Undertale 391540, Dave the Diver 1868140): the PICS request goes out with `access_token: 0` for every app and the hook logs "no apps need token injection", because Hubcap `.lua` files carry `addappid(id, 1, "<depot key>")` and no `addtoken`, while `BuildDepotDependency` then sees 0 depots for an app whose appinfo is present (`pSteamApp`/`pBuildId` valid). The reply was never logged, so "no token, so no depots" was a hypothesis.
+  - `CMsgClientPICSProductInfoResponse` (8904): for each lua-declared app, a trace line with `token_sent`, `missing_token`, `only_public`, buffer size and the depot count read from the appinfo buffer (`n/a` for a binary buffer); a warning when the app came back with `missing_token`, an empty buffer or 0 depots; a warning for a lua app in `unknown_appids`; one debug summary per reply (apps, unknown, missing_token, lua apps, empty lua apps, response_pending, http_host). Other apps are only counted.
+  - `CMsgClientPICSAccessTokenResponse` (8906): which lua apps the server granted a token for and which it denied.
+  - Pure logic (depot counter for text VDF, "came back empty" decision) in `Hook/PicsDiagnosticsLogic.h`, tested by `pics_diagnostics_logic_test`. The two reply messages are parse-only definitions in `proto/steam_messages.proto` (field numbers from the public Steam protobufs; unverified against a live reply until the first run, where a lua app that never shows up in the trace would point at a wrong number).
+- Nothing changes in Release (the handlers are compiled out and the replies are not parsed), and the token injection (`HandleSend`) is unchanged: it still injects only when the `.lua` has `addtoken`. The fork cannot mint a token: PICS access tokens are issued by the server per account, and the injection has been this way since the first commit of the fork (inherited from OpenSteamTool; no bypass for token 0).
+
 ## [v1.5.0] - Unreleased
 
 Independence and stability. Scope and rationale: [docs/ROADMAP-v1.5.0.md](docs/ROADMAP-v1.5.0.md).
