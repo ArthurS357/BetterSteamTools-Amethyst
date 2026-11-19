@@ -64,19 +64,83 @@ namespace {
         Signals s;
         EXPECT_FALSE(s.Record(Observation::Irrelevant, 5));
         EXPECT_FALSE(s.HasStale());
-        EXPECT_FALSE(s.HasFresh());
+        EXPECT_FALSE(s.HasHealed());
 
         EXPECT_TRUE(s.Record(Observation::Stale, 391540));
         EXPECT_FALSE(s.Record(Observation::Stale, 1868140));
         EXPECT_EQ(s.FirstStaleApp(), 391540u);
 
-        EXPECT_TRUE(s.Record(Observation::Fresh, 213670));
+        EXPECT_FALSE(s.Record(Observation::Fresh, 213670));   // never stale: not credited
+        EXPECT_FALSE(s.HasHealed());
+
+        EXPECT_TRUE(s.Record(Observation::Fresh, 391540));
         EXPECT_FALSE(s.Record(Observation::Fresh, 391540));
-        EXPECT_EQ(s.FirstFreshApp(), 213670u);
+        EXPECT_EQ(s.FirstHealedApp(), 391540u);
 
         EXPECT_FALSE(s.Record(Observation::Irrelevant, 5));
         EXPECT_TRUE(s.HasStale());
-        EXPECT_TRUE(s.HasFresh());
+        EXPECT_TRUE(s.HasHealed());
+    }
+
+    // Regression for the 2026-11-19 second test: an app native to package 0 (Steamworks
+    // Common Redistributables, 228983...) answers "package 0" whatever we inject. It must
+    // leave no trace, so it can never close the latch for the injected apps.
+    TEST(ReactiveRefreshLogicTest, ANativeAppAnsweringFreshLeavesNoTrace) {
+        Signals s;
+        EXPECT_FALSE(s.Record(Observation::Fresh, 228983));
+        EXPECT_FALSE(s.Record(Observation::Fresh, 228986));
+        EXPECT_FALSE(s.HasHealed());
+        EXPECT_EQ(s.Count().everStale, 0u);
+        EXPECT_EQ(s.Count().pending, 0u);
+
+        s.Record(Observation::Stale, 213670);
+        EXPECT_FALSE(s.Record(Observation::Fresh, 228983));   // still not credited
+        EXPECT_EQ(s.Count().everStale, 1u);
+        EXPECT_EQ(s.Count().pending, 1u);
+        EXPECT_FALSE(s.HasHealed());
+    }
+
+    TEST(ReactiveRefreshLogicTest, AnAppThatHealedAndGoesStaleAgainIsPendingAgain) {
+        Signals s;
+        s.Record(Observation::Stale, 213670);
+        s.Record(Observation::Fresh, 213670);
+        EXPECT_EQ(s.Count().pending, 0u);
+        EXPECT_EQ(s.Count().everStale, 1u);
+
+        s.Record(Observation::Stale, 213670);
+        EXPECT_EQ(s.Count().pending, 1u);
+        EXPECT_EQ(s.Count().everStale, 1u);   // same slot, not a second app
+        EXPECT_EQ(s.StillStale(), (std::vector<uint32_t>{213670}));
+    }
+
+    // A real load: far more apps than one probe chain, ids that share home slots.
+    TEST(ReactiveRefreshLogicTest, ManyAppsAreTrackedIndependently) {
+        Signals s;
+        std::vector<uint32_t> ids;
+        for (uint32_t i = 0; i < 1500; ++i) ids.push_back(213670u + i * 7u);
+        for (uint32_t id : ids) s.Record(Observation::Stale, id);
+        for (uint32_t id : ids) s.Record(Observation::Stale, id);   // twice: no second slot
+        EXPECT_EQ(s.Count().everStale, ids.size());
+        EXPECT_EQ(s.Count().pending, ids.size());
+
+        // Heal every other app; the rest stay pending, in ascending order.
+        std::vector<uint32_t> expectedPending;
+        for (size_t i = 0; i < ids.size(); ++i) {
+            if (i % 2 == 0) s.Record(Observation::Fresh, ids[i]);
+            else expectedPending.push_back(ids[i]);
+        }
+        EXPECT_EQ(s.Count().everStale, ids.size());
+        EXPECT_EQ(s.Count().pending, expectedPending.size());
+        EXPECT_EQ(s.StillStale(), expectedPending);
+    }
+
+    // The table has a ceiling: past it new apps are dropped, nothing hangs or corrupts.
+    TEST(ReactiveRefreshLogicTest, AFullTableDropsNewAppsWithoutHanging) {
+        Signals s;
+        for (uint32_t i = 1; i <= Signals::kCapacity + 500; ++i) s.Record(Observation::Stale, i);
+        EXPECT_EQ(s.Count().everStale, static_cast<size_t>(Signals::kCapacity));
+        EXPECT_FALSE(s.Record(Observation::Fresh, Signals::kCapacity + 400));   // dropped: unknown
+        EXPECT_TRUE(s.Record(Observation::Fresh, 1));
     }
 
     // Regression for M-1: concurrent Record() + reader must never observe HasStale()
@@ -119,22 +183,77 @@ namespace {
         }
     }
 
-    // ── NextAction ───────────────────────────────────────────────────────
+    // Steam threads race on the same apps: each app must end up in exactly one slot (no
+    // duplicate from a lost CAS), and healing from other threads must settle at zero pending.
+    TEST(ReactiveRefreshLogicTest, ConcurrentMarkingNeverDuplicatesAnApp) {
+        constexpr int kRounds = 50;
+        constexpr int kThreads = 4;
+        constexpr uint32_t kApps = 300;
+        for (int round = 0; round < kRounds; ++round) {
+            Signals s;
+            std::atomic<bool> go{false};
+            std::vector<std::thread> threads;
+            for (int t = 0; t < kThreads; ++t) {
+                threads.emplace_back([&, t]() {
+                    while (!go.load(std::memory_order_acquire)) {}
+                    for (uint32_t i = 0; i < kApps; ++i) {
+                        const uint32_t app = 213670u + ((i + static_cast<uint32_t>(t) * 37u) % kApps);
+                        s.Record(Observation::Stale, app);
+                    }
+                });
+            }
+            go.store(true, std::memory_order_release);
+            for (auto& t : threads) t.join();
+            ASSERT_EQ(s.Count().everStale, static_cast<size_t>(kApps));
+            ASSERT_EQ(s.Count().pending, static_cast<size_t>(kApps));
 
-    TEST(ReactiveRefreshLogicTest, FreshStopsAtOnce) {
-        EXPECT_EQ(NextAction(0, true, true), Action::Stop);
-        EXPECT_EQ(NextAction(3, true, false), Action::Stop);
+            threads.clear();
+            go.store(false, std::memory_order_release);
+            for (int t = 0; t < kThreads; ++t) {
+                threads.emplace_back([&, t]() {
+                    while (!go.load(std::memory_order_acquire)) {}
+                    for (uint32_t i = 0; i < kApps; ++i)
+                        s.Record(Observation::Fresh, 213670u + ((i + static_cast<uint32_t>(t) * 37u) % kApps));
+                });
+            }
+            go.store(true, std::memory_order_release);
+            for (auto& t : threads) t.join();
+            EXPECT_EQ(s.Count().everStale, static_cast<size_t>(kApps));
+            EXPECT_EQ(s.Count().pending, 0u);
+        }
     }
 
-    TEST(ReactiveRefreshLogicTest, StaleRefreshesUntilTheBudgetRunsOut) {
+    // ── NextAction ───────────────────────────────────────────────────────
+
+    TEST(ReactiveRefreshLogicTest, EveryStaleAppHealedStopsAtOnce) {
+        EXPECT_EQ(NextAction(0, 2, 0), Action::Stop);
+        EXPECT_EQ(NextAction(3, 1, 0), Action::Stop);
+    }
+
+    TEST(ReactiveRefreshLogicTest, PendingRefreshesUntilTheBudgetRunsOut) {
         for (int i = 0; i < kMaxAttempts; ++i)
-            EXPECT_EQ(NextAction(i, false, true), Action::Refresh) << i;
-        EXPECT_EQ(NextAction(kMaxAttempts, false, true), Action::Stop);
+            EXPECT_EQ(NextAction(i, 1, 1), Action::Refresh) << i;
+        EXPECT_EQ(NextAction(kMaxAttempts, 1, 1), Action::Stop);
     }
 
     TEST(ReactiveRefreshLogicTest, NoEvidenceMeansNoRefresh) {
-        EXPECT_EQ(NextAction(0, false, false), Action::Wait);
-        EXPECT_EQ(NextAction(kMaxAttempts, false, false), Action::Stop);
+        EXPECT_EQ(NextAction(0, 0, 0), Action::Wait);
+        EXPECT_EQ(NextAction(kMaxAttempts, 0, 0), Action::Stop);
+    }
+
+    TEST(ReactiveRefreshLogicTest, TheBudgetCoversAboutFifteenSeconds) {
+        EXPECT_EQ(kMaxAttempts, 10);
+        EXPECT_EQ(kIntervalMs, 1500u);
+        EXPECT_EQ(kDebounceMs + static_cast<uint32_t>(kMaxAttempts) * kIntervalMs, 15250u);
+    }
+
+    // ── FormatAppList ────────────────────────────────────────────────────
+
+    TEST(ReactiveRefreshLogicTest, FormatsTheStaleListForTheLog) {
+        EXPECT_EQ(FormatAppList({}), "[]");
+        EXPECT_EQ(FormatAppList({213670}), "[213670]");
+        EXPECT_EQ(FormatAppList({213670, 213671, 3357650}), "[213670, 213671, 3357650]");
+        EXPECT_EQ(FormatAppList({1, 2, 3, 4, 5}, 3), "[1, 2, 3, ... +2 more]");
     }
 
     // ── RunWorker (the worker loop) ────────────────────────────────────────────
@@ -145,7 +264,7 @@ namespace {
         void operator()(uint32_t ms) { sleeps.push_back(ms); now += ms; }
     };
 
-    // The 2026-11-19 case: stale at injection, the first extra refresh fixes the index.
+    // The 2026-11-19 first-trace case: stale at injection, the first extra refresh fixes it.
     TEST(ReactiveRefreshLogicTest, OneRefreshThatTakesStopsAtTheNextLook) {
         Signals s;
         s.Record(Observation::Stale, 213670);
@@ -157,7 +276,8 @@ namespace {
             s.Record(Observation::Fresh, 213670);   // Steam answers "package 0" right after
         });
 
-        EXPECT_TRUE(r.fresh);
+        EXPECT_TRUE(r.healed);
+        EXPECT_TRUE(r.stillStale.empty());
         EXPECT_EQ(r.refreshes, 1);
         ASSERT_EQ(refreshAt.size(), 1u);
         EXPECT_EQ(refreshAt[0], kDebounceMs);       // first refresh after the debounce only
@@ -165,10 +285,11 @@ namespace {
     }
 
     // The index never refreshes: exactly kMaxAttempts refreshes, at least kIntervalMs apart,
-    // then the loop ends on its own.
-    TEST(ReactiveRefreshLogicTest, GivesUpAfterTheBudgetWithTheIntervalRespected) {
+    // then the loop ends on its own and reports which apps never healed.
+    TEST(ReactiveRefreshLogicTest, GivesUpAfterTheBudgetAndListsTheStaleApps) {
         Signals s;
         s.Record(Observation::Stale, 391540);
+        s.Record(Observation::Stale, 213670);
         FakeClock clock;
         std::vector<uint32_t> refreshAt;
         std::vector<int> attempts;
@@ -178,19 +299,110 @@ namespace {
             refreshAt.push_back(clock.now);
         });
 
-        EXPECT_FALSE(r.fresh);
+        EXPECT_FALSE(r.healed);
         EXPECT_TRUE(r.stale);
         EXPECT_FALSE(r.stopped);
         EXPECT_EQ(r.refreshes, kMaxAttempts);
-        EXPECT_EQ(attempts, (std::vector<int>{1, 2, 3, 4, 5}));
+        EXPECT_EQ(attempts, (std::vector<int>{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}));
+        EXPECT_EQ(r.stillStale, (std::vector<uint32_t>{213670, 391540}));
         ASSERT_EQ(refreshAt.size(), static_cast<size_t>(kMaxAttempts));
         for (size_t i = 1; i < refreshAt.size(); ++i)
             EXPECT_GE(refreshAt[i] - refreshAt[i - 1], kIntervalMs);
         EXPECT_EQ(clock.sleeps.size(), static_cast<size_t>(kMaxAttempts + 1));   // bounded
+        EXPECT_EQ(clock.now, 15250u);
     }
 
-    // Healthy start: the index already lists the lua apps, nothing is refreshed.
-    TEST(ReactiveRefreshLogicTest, AlreadyFreshMeansNoRefreshAtAll) {
+    // THE regression (2026-11-19, second test): a native app (A) answers "package 0" at once
+    // and has never been stale; the injected app (B) is stale. The worker must keep going
+    // until B heals, not stop on A.
+    TEST(ReactiveRefreshLogicTest, ANativeFreshAppDoesNotStopTheWorkerWhileAnInjectedAppIsStale) {
+        constexpr uint32_t kNative = 228983, kInjected = 213670;
+        Signals s;
+        s.Record(Observation::Stale, kInjected);
+        s.Record(Observation::Fresh, kNative);       // native, never stale
+
+        FakeClock clock;
+        int refreshes = 0;
+        const Summary r = RunWorker(s, std::ref(clock), [&](int n) {
+            ++refreshes;
+            s.Record(Observation::Fresh, kNative);   // it keeps answering fresh each time
+            if (n == 3) s.Record(Observation::Fresh, kInjected);   // the index takes on the 3rd
+        });
+
+        EXPECT_EQ(refreshes, 3);                     // not 0 or 1: it went on for B
+        EXPECT_TRUE(r.healed);
+        EXPECT_TRUE(r.stillStale.empty());
+    }
+
+    // Same setup, but B never heals: the native app must not cut the budget short either.
+    TEST(ReactiveRefreshLogicTest, ANativeFreshAppDoesNotCutTheBudgetShort) {
+        Signals s;
+        s.Record(Observation::Stale, 213670);
+        FakeClock clock;
+
+        const Summary r = RunWorker(s, std::ref(clock), [&](int) {
+            s.Record(Observation::Fresh, 228983);
+            s.Record(Observation::Fresh, 229033);
+        });
+
+        EXPECT_EQ(r.refreshes, kMaxAttempts);
+        EXPECT_FALSE(r.healed);
+        EXPECT_EQ(r.stillStale, (std::vector<uint32_t>{213670}));
+    }
+
+    // Several injected apps heal at different refreshes: the worker stops after the last one.
+    TEST(ReactiveRefreshLogicTest, StopsOnlyWhenTheLastStaleAppHeals) {
+        Signals s;
+        s.Record(Observation::Stale, 213670);
+        s.Record(Observation::Stale, 3357650);
+        s.Record(Observation::Stale, 4115450);
+        FakeClock clock;
+
+        const Summary r = RunWorker(s, std::ref(clock), [&](int n) {
+            if (n == 2) s.Record(Observation::Fresh, 213670);
+            if (n == 4) { s.Record(Observation::Fresh, 3357650); s.Record(Observation::Fresh, 4115450); }
+        });
+
+        EXPECT_EQ(r.refreshes, 4);
+        EXPECT_TRUE(r.healed);
+        EXPECT_TRUE(r.stillStale.empty());
+    }
+
+    // Some heal, one stays: the give-up list holds only the one that stayed.
+    TEST(ReactiveRefreshLogicTest, TheGiveUpListHoldsOnlyTheAppsThatNeverHealed) {
+        Signals s;
+        s.Record(Observation::Stale, 213670);
+        s.Record(Observation::Stale, 3357650);
+        FakeClock clock;
+
+        const Summary r = RunWorker(s, std::ref(clock), [&](int n) {
+            if (n == 1) s.Record(Observation::Fresh, 3357650);
+        });
+
+        EXPECT_EQ(r.refreshes, kMaxAttempts);
+        EXPECT_FALSE(r.healed);
+        EXPECT_EQ(r.stillStale, (std::vector<uint32_t>{213670}));
+    }
+
+    // Something else (a .lua watcher refresh) healed the apps before our first look: done,
+    // no refresh of ours needed.
+    TEST(ReactiveRefreshLogicTest, HealedByAnotherRefreshMeansNoRefreshOfOurs) {
+        Signals s;
+        s.Record(Observation::Stale, 213670);
+        s.Record(Observation::Fresh, 213670);
+        FakeClock clock;
+        int calls = 0;
+
+        const Summary r = RunWorker(s, std::ref(clock), [&](int) { ++calls; });
+
+        EXPECT_TRUE(r.healed);
+        EXPECT_EQ(calls, 0);
+        EXPECT_EQ(clock.sleeps, (std::vector<uint32_t>{kDebounceMs}));
+    }
+
+    // Healthy start: only apps that were never stale answer "package 0". There is no evidence
+    // of a stale index, so nothing is refreshed; the worker just waits out its (sleeping) budget.
+    TEST(ReactiveRefreshLogicTest, NeverStaleMeansNoRefreshAtAll) {
         Signals s;
         s.Record(Observation::Fresh, 391540);
         FakeClock clock;
@@ -198,9 +410,10 @@ namespace {
 
         const Summary r = RunWorker(s, std::ref(clock), [&](int) { ++calls; });
 
-        EXPECT_TRUE(r.fresh);
         EXPECT_EQ(calls, 0);
-        EXPECT_EQ(clock.sleeps, (std::vector<uint32_t>{kDebounceMs}));
+        EXPECT_FALSE(r.stale);
+        EXPECT_FALSE(r.healed);
+        EXPECT_EQ(clock.sleeps.size(), static_cast<size_t>(kMaxAttempts + 1));
     }
 
     // No lua app is asked about at all: the worker waits out its budget and refreshes nothing.
@@ -212,7 +425,7 @@ namespace {
         const Summary r = RunWorker(s, std::ref(clock), [&](int) { ++calls; });
 
         EXPECT_EQ(calls, 0);
-        EXPECT_FALSE(r.fresh);
+        EXPECT_FALSE(r.healed);
         EXPECT_EQ(clock.sleeps.size(), static_cast<size_t>(kMaxAttempts + 1));
     }
 
@@ -231,7 +444,7 @@ namespace {
             if (n == 2) s.Record(Observation::Fresh, 1868140);
         });
 
-        EXPECT_TRUE(r.fresh);
+        EXPECT_TRUE(r.healed);
         EXPECT_EQ(refreshes, 2);
         EXPECT_LE(r.refreshes, kMaxAttempts);
     }

@@ -107,22 +107,25 @@ namespace {
         [[maybe_unused]] const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - start).count();
 
-        if (r.fresh && r.refreshes == 0) {
-            LOG_PACKAGE_DEBUG("Reactive refresh: not needed, Steam already lists lua apps in package {} "
-                              "(first seen on app {})", kInjectedPackageId, g_refreshSignals.FirstFreshApp());
-        } else if (r.fresh) {
-            LOG_PACKAGE_INFO("Reactive refresh: Steam lists lua apps in package {} after {} extra refresh(es), "
-                             "{} ms after the initial one (stale first seen on app {}, fresh first seen on app {})",
+        if (r.healed && r.refreshes == 0) {
+            LOG_PACKAGE_DEBUG("Reactive refresh: not needed, apps first seen stale (first: app {}) are now "
+                              "in package {} without a refresh of ours (first healed: app {})",
+                              g_refreshSignals.FirstStaleApp(), kInjectedPackageId,
+                              g_refreshSignals.FirstHealedApp());
+        } else if (r.healed) {
+            LOG_PACKAGE_INFO("Reactive refresh: Steam lists every lua app seen stale in package {} after {} extra "
+                             "refresh(es), {} ms after the initial one (stale first seen on app {}, first healed app {})",
                              kInjectedPackageId, r.refreshes, ms, g_refreshSignals.FirstStaleApp(),
-                             g_refreshSignals.FirstFreshApp());
+                             g_refreshSignals.FirstHealedApp());
         } else if (r.refreshes > 0) {
-            LOG_PACKAGE_WARN("Reactive refresh: gave up after {} refresh(es) in {} ms; lua apps still read as "
-                             "in no package (first: app {})", r.refreshes, ms, g_refreshSignals.FirstStaleApp());
+            LOG_PACKAGE_WARN("Reactive refresh: gave up after {} refreshes ({} ms). Still stale: {}",
+                             r.refreshes, ms, ReactiveRefreshLogic::FormatAppList(r.stillStale));
         } else if (r.stale) {
-            LOG_PACKAGE_WARN("Reactive refresh: stale answer seen only at the end of the {} ms window "
-                             "(first: app {}), no refreshes left", ms, g_refreshSignals.FirstStaleApp());
+            LOG_PACKAGE_WARN("Reactive refresh: stale answer seen only at the end of the {} ms window, "
+                             "no refreshes left. Still stale: {}", ms,
+                             ReactiveRefreshLogic::FormatAppList(r.stillStale));
         } else {
-            LOG_PACKAGE_DEBUG("Reactive refresh: no lua app was looked up in {} ms, nothing to do", ms);
+            LOG_PACKAGE_DEBUG("Reactive refresh: no lua app read as stale in {} ms, nothing to do", ms);
         }
     }
 
@@ -390,7 +393,7 @@ namespace {
                     LOG_PACKAGE_TRACE("CheckAppOwnership: Steam's ownership index is stale, lua apps read as in no package (first seen on app {})",
                                       appId);
                 } else {
-                    LOG_PACKAGE_TRACE("CheckAppOwnership: Steam's ownership index lists package {} (first seen on app {})",
+                    LOG_PACKAGE_TRACE("CheckAppOwnership: Steam's ownership index now lists package {} for an app first seen stale (first: app {})",
                                       kInjectedPackageId, appId);
                 }
             }
