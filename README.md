@@ -137,8 +137,8 @@ The `extract_tickets` tool dumps the `AppTicket` and `ETicket` hex strings you n
 
 ## Known issues
 
-### A download that Steam resumes by itself at startup can fail ("Invalid content configuration")
-If a download of a Lua-added game was paused or interrupted when Steam was closed, Steam may try to resume it at the next start and cancel it with "Invalid content configuration". Seen on a live Steam on 2026-11-19. The cause is on Steam's side of the ownership data (it reports the Lua apps as in no package at startup); a repeated license refresh from this tool did not change that in testing. Pressing Resume by hand worked once (after Steam's data had updated on its own) and failed in later tests, so it is not a reliable workaround and there is no verified one yet. Details and what was measured: the v1.5.2 entry in [CHANGELOG.md](CHANGELOG.md). Reports with a Debug `package.log` and `manifest.log` (`[log] level = "trace"`) help.
+### A download that Steam resumes by itself at startup could fail ("Invalid content configuration")
+If a download of a Lua-added game was paused or interrupted when Steam was closed, Steam could try to resume it at the next start and cancel it with "Invalid content configuration". **Fixed in v1.5.3**: the tool now makes Steam rebuild its ownership data for the Lua apps right after it injects them. Two clean starts on one live Steam resumed by themselves; that is a small sample, so if it still happens for you, send a Debug `package.log` and `manifest.log` (`[log] level = "trace"`; look for `Ownership index rebuild requested` and `License pass finished`). A fallback that worked in testing: close Steam completely, move `appcache\appinfo.vdf` aside, start Steam again (it downloads the app info anew). Details and what was measured: the v1.5.3 entry in [CHANGELOG.md](CHANGELOG.md).
 
 ## Future
 - Steam Cloud synchronization support.(This is a huge project)
