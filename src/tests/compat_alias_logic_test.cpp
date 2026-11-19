@@ -377,20 +377,26 @@ namespace {
                 }
             });
 
+            // Counted per alias: the call that writes the DLL can find the TOML already
+            // up to date (another thread wrote it first), so no single call need
+            // report both writes even when every alias lands.
             std::atomic<int> failures{ 0 };
-            std::atomic<int> successes{ 0 };
+            std::atomic<int> dllWrites{ 0 };
+            std::atomic<int> tomlWrites{ 0 };
             std::vector<std::thread> writers;
             for (int i = 0; i < kThreads; ++i)
                 writers.emplace_back([&] {
                     const auto r = CompatAliasLogic::Apply(true, dir_, "9999");
                     if (r.dll.error || r.toml.error) ++failures;
-                    if (r.dll.written && r.toml.written) ++successes;
+                    if (r.dll.written)  ++dllWrites;
+                    if (r.toml.written) ++tomlWrites;
                 });
             for (auto& t : writers) t.join();
             stop = true;
             observer.join();
 
-            EXPECT_GE(successes.load(), 1) << "round " << round;
+            EXPECT_GE(dllWrites.load(), 1) << "round " << round;
+            EXPECT_GE(tomlWrites.load(), 1) << "round " << round;
 #ifndef _WIN32
             EXPECT_EQ(failures.load(), 0) << "round " << round;
 #endif
