@@ -9,6 +9,10 @@
 # pass but not yet run wholesale over the tree (that is a separate cleanup task).
 # WarningsAsErrors is empty so it never blocks a build.
 #
+# misc-include-cleaner is disabled: it wants every file to include every header it uses
+# (AppId_t and the like through WinAPI/Steamworks headers) and made the CI job run for
+# over an hour (1h09m on PR #2) without finding a defect.
+#
 # Several cppcoreguidelines/modernize checks are disabled deliberately: this is
 # a DLL-injection + inline-hooking codebase, where reinterpret_cast, pointer
 # arithmetic over foreign memory, C-style Win32 varargs and process-wide global
@@ -44,6 +48,7 @@ Checks: >
   -cert-err58-cpp,
   -misc-non-private-member-variables-in-classes,
   -misc-no-recursion,
+  -misc-include-cleaner,
   -bugprone-easily-swappable-parameters
 
 WarningsAsErrors: ''
