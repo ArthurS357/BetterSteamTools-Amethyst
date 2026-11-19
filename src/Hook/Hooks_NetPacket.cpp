@@ -184,29 +184,27 @@ namespace Hooks_NetPacket_AccessToken {
             s.appId        = app.appid();
             s.luaApp       = LuaConfig::HasDepot(app.appid());
             s.missingToken = app.missing_token();
+            s.metaOnly     = resp.meta_data_only();
             s.bufferBytes  = app.buffer().size();
             if (!s.luaApp) continue;
 
             ++luaApps;
             s.tokenSent = SentHadToken(app.appid());
             s.depots    = PicsDiagnosticsLogic::CountAppInfoDepots(app.buffer());
-            LOG_PICS_TRACE("PICS reply app={} token_sent={} missing_token={} only_public={} change={} "
-                           "buffer={}B depots={}",
-                           s.appId, s.tokenSent, s.missingToken, app.only_public(), app.change_number(),
-                           s.bufferBytes, s.depots ? std::to_string(*s.depots) : std::string("n/a"));
+            LOG_PICS_TRACE("PICS reply app={} token_sent={} missing_token={} meta_only={} only_public={} "
+                           "change={} buffer={}B depots={}",
+                           s.appId, s.tokenSent, s.missingToken, s.metaOnly, app.only_public(),
+                           app.change_number(), s.bufferBytes,
+                           s.depots ? std::to_string(*s.depots) : std::string("n/a"));
             if (PicsDiagnosticsLogic::LuaAppCameBackEmpty(s)) {
                 ++luaEmpty;
-                LOG_PICS_WARN("PICS: lua app {} came back with no depots (token_sent={} missing_token={} "
-                              "buffer={}B). Check that its .lua has addtoken.",
-                              s.appId, s.tokenSent, s.missingToken, s.bufferBytes);
+                LOG_PICS_WARN("PICS: lua app {} came back without its appinfo (token_sent={} missing_token={} "
+                              "meta_only={} buffer={}B). Check that its .lua has addtoken.",
+                              s.appId, s.tokenSent, s.missingToken, s.metaOnly, s.bufferBytes);
             }
         }
-
-        for (const uint32 id : resp.unknown_appids()) {
-            if (!LuaConfig::HasDepot(id)) continue;
-            LOG_PICS_WARN("PICS: lua app {} is in unknown_appids (token_sent={}). Server has no appinfo for it.",
-                          id, SentHadToken(id));
-        }
+        // unknown_appids is only counted (in the summary below): Steam asks for the depot and DLC
+        // ids that package 0 lists as if they were apps, and the server does not know those.
 
         LOG_PICS_DEBUG("CMsgClientPICSProductInfoResponse: apps={} unknown={} missing_token={} lua_apps={} "
                        "lua_empty={} buffers={}B pending={} meta_only={} http_host={}",

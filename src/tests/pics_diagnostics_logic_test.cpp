@@ -149,6 +149,24 @@ namespace {
         EXPECT_FALSE(LuaAppCameBackEmpty(s));
     }
 
+    // Regression (field test 2026-11-19, Undertale): a meta_data_only reply carries no buffer by
+    // design, the payload comes over HTTP, so an empty buffer must not be flagged.
+    TEST(PicsDiagnosticsLogicTest, MetaOnlyReplyWithEmptyBufferIsNotFlagged) {
+        AppSummary s = Lua();
+        s.metaOnly    = true;
+        s.bufferBytes = 0;
+        s.depots.reset();
+        EXPECT_FALSE(LuaAppCameBackEmpty(s));
+    }
+
+    // missing_token still wins: the server withheld the data whatever the reply mode.
+    TEST(PicsDiagnosticsLogicTest, MetaOnlyReplyWithMissingTokenIsStillFlagged) {
+        AppSummary s = Lua();
+        s.metaOnly     = true;
+        s.missingToken = true;
+        EXPECT_TRUE(LuaAppCameBackEmpty(s));
+    }
+
     TEST(PicsDiagnosticsLogicTest, NonLuaAppsAreNeverFlagged) {
         AppSummary s;
         s.appId        = 5;

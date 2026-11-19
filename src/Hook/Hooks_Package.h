@@ -48,4 +48,15 @@ namespace Hooks_Package {
     // Takes g_appIdVecMutex, so never call it while holding LuaConfig's lock.
     enum class InjectedState { NotReady, Absent, Present };
     InjectedState GetInjectedState(AppId_t id);
+
+    // Diagnostics: where `id` sits in the injected package's AppIdVec and how ordered the vector
+    // is right now. Same locking as GetInjectedState. Linear in the vector size: log use only.
+    struct InjectedLayout {
+        bool     ready   = false;   // the injected package is resolved
+        bool     present = false;   // id is in the vector
+        uint32_t pos     = 0;       // first index of id (valid when present)
+        uint32_t size    = 0;       // vector size
+        bool     sorted  = true;    // vector is in ascending order
+    };
+    InjectedLayout GetInjectedLayout(AppId_t id);
 }

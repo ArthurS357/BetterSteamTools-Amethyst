@@ -23,16 +23,23 @@ namespace PicsDiagnosticsLogic {
         bool                  luaApp       = false;   // declared by a .lua (LuaConfig::HasDepot)
         bool                  tokenSent    = false;   // the request that asked for it carried a token != 0
         bool                  missingToken = false;   // reply flag: server wanted a token
+        bool                  metaOnly     = false;   // reply flag meta_data_only: the payload comes over
+                                                      // HTTP (http_host), so bufferBytes == 0 is normal
         size_t                bufferBytes  = 0;       // appinfo payload size in the reply
         std::optional<uint32_t> depots;               // nullopt: buffer absent or not text VDF
     };
 
     // A lua app whose reply carries no usable depot list: the case to flag.
-    // `depots` unknown (binary or absent buffer) counts only when the buffer is empty or the
-    // server said missing_token, so an unreadable-but-present buffer is never reported as empty.
+    // missing_token always counts (the server withheld the data). A meta_data_only reply has no
+    // buffer by design (Steam downloads it over HTTP from the sha), so an empty buffer there says
+    // nothing and is not flagged; field test 2026-11-19 had this false positive for Undertale.
+    // Otherwise an empty buffer, or a text buffer with 0 depots, counts; a present buffer that
+    // could not be counted (binary) is never reported as empty.
     [[nodiscard]] inline bool LuaAppCameBackEmpty(const AppSummary& s) {
         if (!s.luaApp) return false;
-        if (s.missingToken || s.bufferBytes == 0) return true;
+        if (s.missingToken) return true;
+        if (s.metaOnly) return false;
+        if (s.bufferBytes == 0) return true;
         return s.depots.has_value() && *s.depots == 0;
     }
 
