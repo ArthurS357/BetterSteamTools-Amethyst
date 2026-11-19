@@ -3,6 +3,7 @@
 #include "Hooks_SteamUI.h"
 #include "PackageReconcileLogic.h"
 #include "Hook/AppIdVecOrderLogic.h"
+#include "Hook/IndexRebuildLogic.h"
 #include "Hook/InjectedAppIdLogic.h"
 #include "dllmain.h"
 #include "Utils/HookSupport/VehCommon.h"
@@ -15,7 +16,13 @@
 namespace {
     RESOLVE_FUNC(CUtlMemoryGrow,               void*, CUtlVector<AppId_t>*, int);
     RESOLVE_FUNC(MarkLicenseAsChanged,         int64, void*, uint32, bool);
-    RESOLVE_FUNC(ProcessPendingLicenseUpdates, bool,  void*);
+    // Steam's CUser handler for "appinfo update finished" (see IndexRebuildLogic.h).
+    // The upstream pattern TOML does not list it, so its signature lives here. The
+    // CUser field offsets are wildcarded; the handler stays correct if they move.
+    RESOLVE_FUNC(OnAppInfoUpdated, void, void*, IndexRebuildLogic::AppInfoUpdateMsg*);
+    constexpr const char* kOnAppInfoUpdatedSig =
+        "83 7A 04 00 77 29 83 7A 08 00 77 23 80 B9 ?? ?? ?? ?? 00 75 12 80 B9 ?? ?? ?? ?? 00 "
+        "75 09 83 B9 ?? ?? ?? ?? 00 74 11 C6 81 ?? ?? ?? ?? 01 C3 66 C7 81 ?? ?? ?? ?? 01 01 C3";
 
     CAPTURE_THIS_FUNC(GetPackageInfo, PackageInfo*,g_pCPackageInfo,void* pThis, uint32 packageId, uint64 accessToken);
     
@@ -28,8 +35,8 @@ namespace {
     // the initial fill on a Steam thread, NotifyLicenseChanged on a watcher thread,
     // the owned-depot dump. A plain mutex because almost all of them write, including
     // the fill. Order: g_appIdVecMutex -> LuaConfig's g_stateMutex (see LuaConfig.cpp).
-    // Never hold it across MarkLicenseAsChanged/ProcessPendingLicenseUpdates or
-    // GetPackageInfo: those run Steam code that can re-enter CheckAppOwnership.
+    // Never hold it across MarkLicenseAsChanged or GetPackageInfo: those run Steam
+    // code that can re-enter CheckAppOwnership.
     // ponytail: Steam's own threads read this vector with no lock we can take, and
     // CUtlMemoryGrow can reallocate it under them. That race is inherent to mutating
     // it off-thread; the upgrade path is marshalling the mutation onto the thread
@@ -39,14 +46,31 @@ namespace {
     constexpr PackageId_t kInjectedPackageId = 0;
     constexpr uint64_t kInjectedPkgAccessToken = 10660652434190618804ull;
 
-    bool MarkLicenseAsChangedAndProcessUpdates() {
-        if (!g_pCUser || !oMarkLicenseAsChanged || !oProcessPendingLicenseUpdates) {
-            LOG_PACKAGE_WARN("MarkLicenseAsChangedAndProcessUpdates: dependencies not ready, skipping");
+    // Marks package 0 changed and raises CUser's flags; Steam's RunFrame then runs
+    // ProcessPendingLicenseUpdates and rebuilds the ownership index on its own thread.
+    // Neither of those is ever called from here: the index has no lock, and
+    // NotifyLicenseChanged reaches this from the file-watcher thread.
+    // ponytail: the trigger is one unlocked aligned 16-bit store into CUser. A race with
+    // RunFrame clearing the run flag is harmless: PPLU clears the rebuild flag before it
+    // rebuilds (0x9FA7DC, then the call at 0x9FA7E4), so a flag raised meanwhile is never
+    // lost. MarkLicenseAsChanged still runs on the watcher thread as it always has.
+    bool MarkLicenseAsChangedAndRequestRebuild() {
+        void* user = g_pCUser;
+        if (!user || !oMarkLicenseAsChanged) {
+            LOG_PACKAGE_WARN("MarkLicenseAsChangedAndRequestRebuild: dependencies not ready, skipping");
             return false;
         }
-        oMarkLicenseAsChanged(g_pCUser, kInjectedPackageId, true);
-        oProcessPendingLicenseUpdates(g_pCUser);
-        LOG_PACKAGE_DEBUG("MarkLicenseAsChangedAndProcessUpdates: marked package {} as changed and processed updates", kInjectedPackageId);
+        // A missing trigger (signature not found, warned once at Install) must not take
+        // the mark, or NotifyLicenseChanged's UI removals, down with it.
+        IndexRebuildLogic::MarkAndRequestRebuild(user,
+            [](void* u) { oMarkLicenseAsChanged(u, kInjectedPackageId, true); },
+            [](void* u, IndexRebuildLogic::AppInfoUpdateMsg* m) { if (oOnAppInfoUpdated) oOnAppInfoUpdated(u, m); });
+        if (oOnAppInfoUpdated)
+            LOG_PACKAGE_INFO("Ownership index rebuild requested: package {} marked changed, CUser rebuild flag set",
+                             kInjectedPackageId);
+        else
+            LOG_PACKAGE_WARN("Package {} marked changed; rebuild flag NOT set (OnAppInfoUpdated unresolved)",
+                             kInjectedPackageId);
         return true;
     }
 
@@ -142,7 +166,7 @@ namespace {
             g_pInjectedPackageInfo = pPkg;
         }
 
-        MarkLicenseAsChangedAndProcessUpdates();
+        MarkLicenseAsChangedAndRequestRebuild();
         return true;
     }
 
@@ -363,7 +387,11 @@ namespace Hooks_Package {
     void Install() {
         RESOLVE_C(CUtlMemoryGrow);
         RESOLVE_C(MarkLicenseAsChanged);
-        RESOLVE_C(ProcessPendingLicenseUpdates);
+        oOnAppInfoUpdated = reinterpret_cast<OnAppInfoUpdated_t>(
+            PatternLoader::FindUniqueSignature(client_hModule, kOnAppInfoUpdatedSig));
+        if (!oOnAppInfoUpdated)
+            LOG_PACKAGE_WARN("OnAppInfoUpdated signature not found (or not unique): "
+                             "injected apps stay unowned until Steam's next appinfo update");
 
         ARM_CAPTURE_C(GetPackageInfo);
 
@@ -440,10 +468,10 @@ namespace Hooks_Package {
         for (AppId_t id : plan.additions)
             Hooks_SteamUI::CancelRemoval(id);
 
-        // Mark package 0 as changed and trigger library refresh. This also fires when
-        // a reload left the id set unchanged, as it always has: the file may have
-        // changed a manifest pin or a token, and nothing shows Steam does not need it.
-        if (!MarkLicenseAsChangedAndProcessUpdates()) {
+        // Mark package 0 as changed and request the index rebuild + library refresh. This
+        // also fires when a reload left the id set unchanged, as it always has: the file may
+        // have changed a manifest pin or a token, and nothing shows Steam does not need it.
+        if (!MarkLicenseAsChangedAndRequestRebuild()) {
             LOG_PACKAGE_WARN("NotifyLicenseChanged: failed to mark license as changed");
             return;
         }

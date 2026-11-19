@@ -11,7 +11,8 @@ namespace Hooks_Package {
     void Install();
     void Uninstall();
 
-    // Mark package 0 as changed and trigger CClientAppManager_ProcessPendingLicenseUpdates.
+    // Mark package 0 as changed and raise CUser's rebuild flags; Steam's own RunFrame
+    // then runs ProcessPendingLicenseUpdates and rebuilds the ownership index.
     void NotifyLicenseChanged();
 
     // One entry of the license list Steam sends after logon. The access token is

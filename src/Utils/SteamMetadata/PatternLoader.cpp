@@ -89,7 +89,8 @@ static bool ParseSig(const std::string& str,
 
 static void* ScanModule(OSTPlatform::DynamicLibrary::ModuleHandle module,
                         const std::vector<uint8_t>& bytes,
-                        const std::vector<uint8_t>& mask)
+                        const std::vector<uint8_t>& mask,
+                        size_t from = 0)
 {
     const auto image = OSTPlatform::Memory::GetModuleImage(module);
     if (!image) return nullptr;
@@ -99,7 +100,7 @@ static void* ScanModule(OSTPlatform::DynamicLibrary::ModuleHandle module,
     size_t patLen = bytes.size();
     if (size < patLen) return nullptr;
 
-    for (size_t i = 0; i <= size - patLen; ++i) {
+    for (size_t i = from; i <= size - patLen; ++i) {
         bool found = true;
         for (size_t j = 0; j < patLen; ++j) {
             if (mask[j] && base[i + j] != bytes[j]) { found = false; break; }
@@ -563,6 +564,17 @@ void* Find(OSTPlatform::DynamicLibrary::ModuleHandle module, const char* funcNam
 void* FindPattern(OSTPlatform::DynamicLibrary::ModuleHandle module, const char* funcName)
 {
     return Find(module, funcName, PatternLoaderLogic::Requirement::Required);
+}
+
+void* FindUniqueSignature(OSTPlatform::DynamicLibrary::ModuleHandle module, const char* sig)
+{
+    std::vector<uint8_t> bytes, mask;
+    if (!ParseSig(sig, bytes, mask)) return nullptr;
+    void* hit = ScanModule(module, bytes, mask);
+    if (!hit) return nullptr;
+    const auto image = OSTPlatform::Memory::GetModuleImage(module);
+    const size_t next = static_cast<size_t>(static_cast<uint8_t*>(hit) - image->base) + 1;
+    return ScanModule(module, bytes, mask, next) ? nullptr : hit;   // ambiguous = unusable
 }
 
 void* FindPatternOptional(OSTPlatform::DynamicLibrary::ModuleHandle module, const char* funcName)

@@ -17,6 +17,11 @@ namespace PatternLoader {
     // but is never listed in the popup.
     void* FindPatternOptional(OSTPlatform::DynamicLibrary::ModuleHandle module, const char* funcName);
 
+    // Byte-signature scan for a function the upstream pattern TOML does not list.
+    // Returns nullptr unless `sig` matches exactly once in the module image. No
+    // RVA cache, no popup, no shadow recording: the caller decides what a miss means.
+    void* FindUniqueSignature(OSTPlatform::DynamicLibrary::ModuleHandle module, const char* sig);
+
     // Report unresolved required functions after all hooks have been installed.
     void ReportMissingFunctions();
 
