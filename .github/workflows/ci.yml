@@ -69,7 +69,14 @@ jobs:
         continue-on-error: true
         run: |
           clang-tidy --version
-          $files = git ls-files 'src/*.cpp' | Where-Object { $_ -notmatch '^src/tests/' -and $_ -notmatch '^src/proto/' }
+          # Scope: v1.5.0 code only (SteamMetadata + its new tests). The legacy files are
+          # stable and made a full-tree run take 55 min. tools/*.cpp are EXCLUDE_FROM_ALL
+          # (not in compile_commands.json); their logic lives in the *Logic.h headers,
+          # reached through these tests.
+          $tests = 'ipc_embedded|module_section|manifest_failover_logic|pattern_(migrate|recorder|loader|refresh)|remote_toml|version_pin'
+          $files = git ls-files 'src/*.cpp' | Where-Object {
+            $_ -match '^src/Utils/SteamMetadata/' -or $_ -match "^src/tests/($tests)[a-z_]*_test\.cpp$"
+          }
           $failed = 0
           foreach ($f in $files) {
             Write-Host "::group::$f"

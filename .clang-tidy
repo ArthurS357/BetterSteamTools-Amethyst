@@ -49,8 +49,17 @@ Checks: >
   -misc-non-private-member-variables-in-classes,
   -misc-no-recursion,
   -misc-include-cleaner,
-  -bugprone-easily-swappable-parameters
+  -bugprone-easily-swappable-parameters,
+  -cppcoreguidelines-avoid-magic-numbers,
+  -readability-magic-numbers,
+  -misc-const-correctness,
+  -bugprone-branch-clone
 
+# Scope (v1.5.0): diagnostics on headers only for the v1.5.0 code (SteamMetadata and
+# tools/); the stable legacy headers (CloudRedirect, Config.h, ...) are not reported.
+# Which .cpp files are analysed is decided by the CI job (.github/workflows/ci.yml).
+# The magic-number / const-correctness / branch-clone checks are off: they produced
+# tens of thousands of findings on legacy code (84k in the PR #3 run) and no defect.
 WarningsAsErrors: ''
-HeaderFilterRegex: '[\\/]src[\\/].*\.(h|hpp)$'
+HeaderFilterRegex: '[\\/](src[\\/]Utils[\\/]SteamMetadata|tools)[\\/].*\.(h|hpp)$'
 FormatStyle: file
