@@ -2,6 +2,14 @@
 
 ## [v1.5.1] - Unreleased
 
+### Changed (experiment, not yet confirmed on a live Steam)
+- **Package 0's `AppIdVec` is kept in ascending order.** The Debug trace of 2026-11-19 measured it unsorted: of 636 ids, Steam's own 196 were in perfect ascending order and the 440 lua ids appended after them (in `unordered_map` order) held 176 inversions, while `BuildDepotDependency` kept returning 0 depots for Undertale (391540 at index 495, its depots at 305, 625 and 626). Steam keeping its own part sorted suggests it looks ids up with a binary search, which would miss ids out of place. That is the hypothesis; it is not proven, and the change is the test of it.
+  - Initial injection: only ids the vector does not hold yet are appended (no duplicates), then the whole vector is sorted in place (`std::sort` over Steam's own buffer; the vector is never replaced).
+  - Reconcile: removals use an order-preserving shift instead of `CUtlVector::FindAndFastRemove` (swap with the last element, which unsorted the vector by itself); the vector is sorted again after additions. `FindAndFastRemove` itself is unchanged in `Steam/Structs.h`.
+  - Pure logic in `Hook/InjectedAppIdLogic.h`, 12 tests in `injected_app_id_logic_test`. The order trace now logs before and after the sort.
+  - Known limit: Steam's threads read the vector with no lock we can take, so a reader can see it mid-sort, as it could already see it mid-append. Marshalling the edit onto the reading thread is the upgrade path.
+  - If the installs still fail with the vector sorted, the hypothesis is wrong and this should be reverted.
+
 ### Added (diagnostics only, Debug builds)
 - **PICS reply logging** (`pics.log`), to check why a lua app can come back with 0 depots ("Invalid content configuration"). Field test 2026-11-19 (Undertale 391540, Dave the Diver 1868140): the PICS request goes out with `access_token: 0` for every app and the hook logs "no apps need token injection", because Hubcap `.lua` files carry `addappid(id, 1, "<depot key>")` and no `addtoken`, while `BuildDepotDependency` then sees 0 depots for an app whose appinfo is present (`pSteamApp`/`pBuildId` valid). The reply was never logged, so "no token, so no depots" was a hypothesis.
   - `CMsgClientPICSProductInfoResponse` (8904): for each lua-declared app, a trace line with `token_sent`, `missing_token`, `only_public`, buffer size and the depot count read from the appinfo buffer (`n/a` for a binary buffer); a warning when the app came back with `missing_token`, an empty buffer or 0 depots; a warning for a lua app in `unknown_appids`; one debug summary per reply (apps, unknown, missing_token, lua apps, empty lua apps, response_pending, http_host). Other apps are only counted.

@@ -3,6 +3,7 @@
 #include "Hooks_SteamUI.h"
 #include "PackageReconcileLogic.h"
 #include "Hook/AppIdVecOrderLogic.h"
+#include "Hook/InjectedAppIdLogic.h"
 #include "dllmain.h"
 #include "Utils/HookSupport/VehCommon.h"
 #include <algorithm>
@@ -98,7 +99,10 @@ namespace {
 
         // Inject all depots from config into the fake license.
         [[maybe_unused]] const uint32 preExisting = pPkg->AppIdVec.m_Size;
-        std::vector<AppId_t> appIds = LuaConfig::GetAllDepotIds();
+        // Only ids the vector does not hold yet (no duplicates), ascending. The whole vector is
+        // sorted in place below: Steam's own part is ascending and the vector must stay so.
+        std::vector<AppId_t> appIds = InjectedAppIdLogic::MissingIds(
+            pPkg->AppIdVec.m_Memory.m_pMemory, pPkg->AppIdVec.m_Size, LuaConfig::GetAllDepotIds());
         if (!appIds.empty()) {
             uint32 oldSize = pPkg->AppIdVec.m_Size;
             uint32 numToAdd = static_cast<uint32>(appIds.size());
@@ -111,7 +115,11 @@ namespace {
                 pPkg->AppIdVec.m_Memory.m_pMemory[oldSize + i] = appIds[i];
         }
 #ifdef OPENSTEAMTOOL_LOGGING_ENABLED
-        LogAppIdVecOrder("initial injection", pPkg->AppIdVec, preExisting);
+        LogAppIdVecOrder("initial injection, before sort", pPkg->AppIdVec, preExisting);
+#endif
+        InjectedAppIdLogic::SortInPlace(pPkg->AppIdVec.m_Memory.m_pMemory, pPkg->AppIdVec.m_Size);
+#ifdef OPENSTEAMTOOL_LOGGING_ENABLED
+        LogAppIdVecOrder("initial injection, after sort", pPkg->AppIdVec, 0);
 #endif
         return true;
     }
@@ -400,7 +408,11 @@ namespace Hooks_Package {
                               plan.removals.size(), plan.additions.size());
 
             for (AppId_t id : plan.removals) {
-                pPkg->AppIdVec.FindAndFastRemove(id);
+                // Order-preserving: FindAndFastRemove swaps the last element into the hole and
+                // unsorts the vector.
+                size_t size = pPkg->AppIdVec.m_Size;
+                InjectedAppIdLogic::RemoveKeepingOrder(pPkg->AppIdVec.m_Memory.m_pMemory, size, id);
+                pPkg->AppIdVec.m_Size = static_cast<uint32>(size);
                 LOG_PACKAGE_DEBUG("NotifyLicenseChanged: removed AppId {}", id);
             }
 
@@ -416,6 +428,8 @@ namespace Hooks_Package {
                     plan.additions.clear();
                 }
             }
+            if (!plan.additions.empty())   // additions were appended: put the vector back in order
+                InjectedAppIdLogic::SortInPlace(pPkg->AppIdVec.m_Memory.m_pMemory, pPkg->AppIdVec.m_Size);
 #ifdef OPENSTEAMTOOL_LOGGING_ENABLED
             LogAppIdVecOrder("reconcile", pPkg->AppIdVec, 0);
 #endif
