@@ -4,12 +4,15 @@
 #include "PackageReconcileLogic.h"
 #include "Hook/AppIdVecOrderLogic.h"
 #include "Hook/InjectedAppIdLogic.h"
+#include "Hook/ReactiveRefreshLogic.h"
 #include "dllmain.h"
 #include "Utils/HookSupport/VehCommon.h"
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -40,14 +43,98 @@ namespace {
     constexpr uint64_t kInjectedPkgAccessToken = 10660652434190618804ull;
 
     bool MarkLicenseAsChangedAndProcessUpdates() {
-        if (!g_pCUser || !oMarkLicenseAsChanged || !oProcessPendingLicenseUpdates) {
+        void* const pUser = g_pCUser.load(std::memory_order_acquire);
+        if (!pUser || !oMarkLicenseAsChanged || !oProcessPendingLicenseUpdates) {
             LOG_PACKAGE_WARN("MarkLicenseAsChangedAndProcessUpdates: dependencies not ready, skipping");
             return false;
         }
-        oMarkLicenseAsChanged(g_pCUser, kInjectedPackageId, true);
-        oProcessPendingLicenseUpdates(g_pCUser);
+        oMarkLicenseAsChanged(pUser, kInjectedPackageId, true);
+        oProcessPendingLicenseUpdates(pUser);
         LOG_PACKAGE_DEBUG("MarkLicenseAsChangedAndProcessUpdates: marked package {} as changed and processed updates", kInjectedPackageId);
         return true;
+    }
+
+    // ── Reactive license refresh (v1.5.2, see ReactiveRefreshLogic.h) ─────────
+    // The hook writes g_refreshSignals (lock-free); one worker thread, started after the
+    // initial refresh, reads it and repeats the refresh while lua apps still read as "in
+    // no package".
+    ReactiveRefreshLogic::Signals g_refreshSignals;
+
+    // Set with release AFTER TryInitFakeLicenseOnce's initial refresh returns. Snapshotted
+    // with acquire BEFORE oCheckAppOwnership so answers computed pre-injection are never
+    // misclassified as Stale.
+    std::atomic<bool> g_initialRefreshDone{false};
+
+    // Serialises the refreshes made from OUR threads (the reactive worker and the .lua /
+    // config watchers via NotifyLicenseChanged), so two of them never run Steam's license
+    // update at the same time. Never taken on a Steam thread: the initial refresh in
+    // TryInitFakeLicenseOnce runs inside the CheckAppOwnership hook and must not wait on a
+    // thread that may itself be inside Steam's license code.
+    std::mutex g_licenseRefreshMutex;
+
+    bool RefreshLicensesFromOwnThread() {
+        std::scoped_lock lock(g_licenseRefreshMutex);
+        return MarkLicenseAsChangedAndProcessUpdates();
+    }
+
+    void SleepInterruptibleMs(uint32_t totalMs) {
+        constexpr uint32_t kSliceMs = 50;
+        uint32_t remaining = totalMs;
+        while (remaining > 0 && !g_refreshSignals.StopRequested()) {
+            const uint32_t slice = remaining < kSliceMs ? remaining : kSliceMs;
+            std::this_thread::sleep_for(std::chrono::milliseconds(slice));
+            remaining -= slice;
+        }
+    }
+
+    void ReactiveRefreshAttempt([[maybe_unused]] int attempt) {
+        if (g_refreshSignals.StopRequested()) return;
+        LOG_PACKAGE_TRACE("Reactive refresh triggered for app {} (attempt {}/{})",
+                          g_refreshSignals.FirstStaleApp(), attempt,
+                          ReactiveRefreshLogic::kMaxAttempts);
+        if (!RefreshLicensesFromOwnThread())
+            LOG_PACKAGE_WARN("Reactive refresh: attempt {} could not run (license functions not ready)", attempt);
+    }
+
+    void ReactiveRefreshWorker() {
+        const auto start = std::chrono::steady_clock::now();
+        const ReactiveRefreshLogic::Summary r = ReactiveRefreshLogic::RunWorker(
+            g_refreshSignals,
+            &SleepInterruptibleMs,
+            &ReactiveRefreshAttempt);
+        if (r.stopped) return;   // DLL unloading / Steam shutting down: touch nothing more.
+
+        [[maybe_unused]] const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - start).count();
+
+        if (r.fresh && r.refreshes == 0) {
+            LOG_PACKAGE_DEBUG("Reactive refresh: not needed, Steam already lists lua apps in package {} "
+                              "(first seen on app {})", kInjectedPackageId, g_refreshSignals.FirstFreshApp());
+        } else if (r.fresh) {
+            LOG_PACKAGE_INFO("Reactive refresh: Steam lists lua apps in package {} after {} extra refresh(es), "
+                             "{} ms after the initial one (stale first seen on app {}, fresh first seen on app {})",
+                             kInjectedPackageId, r.refreshes, ms, g_refreshSignals.FirstStaleApp(),
+                             g_refreshSignals.FirstFreshApp());
+        } else if (r.refreshes > 0) {
+            LOG_PACKAGE_WARN("Reactive refresh: gave up after {} refresh(es) in {} ms; lua apps still read as "
+                             "in no package (first: app {})", r.refreshes, ms, g_refreshSignals.FirstStaleApp());
+        } else if (r.stale) {
+            LOG_PACKAGE_WARN("Reactive refresh: stale answer seen only at the end of the {} ms window "
+                             "(first: app {}), no refreshes left", ms, g_refreshSignals.FirstStaleApp());
+        } else {
+            LOG_PACKAGE_DEBUG("Reactive refresh: no lua app was looked up in {} ms, nothing to do", ms);
+        }
+    }
+
+    // Thread entry. Nothing may escape a thread of ours: it would terminate Steam.
+    void ReactiveRefreshThreadMain() noexcept {
+        try {
+            ReactiveRefreshWorker();
+        } catch (...) {
+            try {
+                LOG_PACKAGE_WARN("Reactive refresh: worker stopped by an exception");
+            } catch (...) {}
+        }
     }
 
     bool CUtlMemoryGrowWrap(CUtlVector<AppId_t>* pVec, int grow_size) {
@@ -143,6 +230,22 @@ namespace {
         }
 
         MarkLicenseAsChangedAndProcessUpdates();
+        // Release pairs with CheckAppOwnership's acquire load before oCheckAppOwnership,
+        // so pre-injection answers are never misclassified as Stale.
+        g_initialRefreshDone.store(true, std::memory_order_release);
+
+        // v1.5.2: this first refresh, made inside the CheckAppOwnership hook right after the
+        // license list arrives, was measured not to reach Steam's ownership index. A worker
+        // of our own repeats it while the hook keeps seeing lua apps in no package. Using
+        // std::thread (_beginthreadex under MSVC) initializes per-thread CRT state cleanly
+        // and never blocks this Steam thread.
+        if (!g_refreshSignals.StopRequested()) {
+            try {
+                std::thread(&ReactiveRefreshThreadMain).detach();
+            } catch (...) {
+                LOG_PACKAGE_WARN("TryInitFakeLicenseOnce: could not start the reactive refresh worker");
+            }
+        }
         return true;
     }
 
@@ -269,11 +372,29 @@ namespace {
             LOG_PACKAGE_DEBUG("CheckAppOwnership: captured CUser {}", pObj);
         }
 
+        // Snapshot before oCheckAppOwnership: only answers computed after the initial
+        // injection and refresh can be evidence that Steam's ownership index is stale.
+        const bool initialRefreshDone = g_initialRefreshDone.load(std::memory_order_acquire);
         bool result = oCheckAppOwnership(pObj, appId, pOwn);
         TryInitFakeLicenseOnce();
         Hooks_Package::TryDumpOwnedDepots();
 
         if (LuaConfig::HasDepot(appId,false)) {
+            // v1.5.2: feed Steam's raw answer (before the override below) to the reactive
+            // refresh. Lock-free and non-blocking; the worker acts on it, not this thread.
+            const auto observation = ReactiveRefreshLogic::Classify(
+                initialRefreshDone, true, pOwn != nullptr,
+                pOwn ? pOwn->PackageId : 0, pOwn ? pOwn->ExistInPackageNums : 0, kInjectedPackageId);
+            if (g_refreshSignals.Record(observation, appId)) {
+                if (observation == ReactiveRefreshLogic::Observation::Stale) {
+                    LOG_PACKAGE_TRACE("CheckAppOwnership: Steam's ownership index is stale, lua apps read as in no package (first seen on app {})",
+                                      appId);
+                } else {
+                    LOG_PACKAGE_TRACE("CheckAppOwnership: Steam's ownership index lists package {} (first seen on app {})",
+                                      kInjectedPackageId, appId);
+                }
+            }
+
             // Diagnostics (Debug + log.level = "trace" only): Steam's own answer
             // before the override below, and which branch it takes.
             LOG_PACKAGE_TRACE("CheckAppOwnership: appId={} result={} pkg={} existInPkgs={} ownsLicense={} "
@@ -284,16 +405,18 @@ namespace {
                               pOwn ? static_cast<int>(pOwn->ReleaseState) : -1,
                               (result && pOwn && pOwn->ExistInPackageNums > 1)
                                   ? "actually owned (MarkOwned, real result)" : "injected (pkg 0, true)");
-            if (result && pOwn->ExistInPackageNums > 1) {
+            if (result && pOwn && pOwn->ExistInPackageNums > 1) {
                 // Actually owned — record so HasDepot excludes it going forward
                 LuaConfig::MarkOwned(appId);
                 pOwn->ReleaseState = EAppReleaseState::Released;
             } else {
-                pOwn->PackageId    = kInjectedPackageId;
-                pOwn->ReleaseState = EAppReleaseState::Released;
-                pOwn->bOwnsLicense = true; //This forces DLCs on steam family shared games that u dont own when adding their appid via .lua
-                // Setting this free flag to false will hide it from the library UI.
-                pOwn->bFreeLicense = false;
+                if (pOwn) {
+                    pOwn->PackageId    = kInjectedPackageId;
+                    pOwn->ReleaseState = EAppReleaseState::Released;
+                    pOwn->bOwnsLicense = true; //This forces DLCs on steam family shared games that u dont own when adding their appid via .lua
+                    // Setting this free flag to false will hide it from the library UI.
+                    pOwn->bFreeLicense = false;
+                }
                 return true;
             }
         }
@@ -373,6 +496,7 @@ namespace Hooks_Package {
     }
 
     void Uninstall() {
+        g_refreshSignals.RequestStop();
         UNHOOK_BEGIN();
         UNINSTALL_HOOK_C(CheckAppOwnership);
         UNHOOK_END();
@@ -443,7 +567,7 @@ namespace Hooks_Package {
         // Mark package 0 as changed and trigger library refresh. This also fires when
         // a reload left the id set unchanged, as it always has: the file may have
         // changed a manifest pin or a token, and nothing shows Steam does not need it.
-        if (!MarkLicenseAsChangedAndProcessUpdates()) {
+        if (!RefreshLicensesFromOwnThread()) {   // watcher thread: serialised with the reactive worker
             LOG_PACKAGE_WARN("NotifyLicenseChanged: failed to mark license as changed");
             return;
         }

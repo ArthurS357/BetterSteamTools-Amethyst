@@ -1,5 +1,14 @@
 # Changelog
 
+## [v1.5.2] - Unreleased
+
+### Fixed (not yet confirmed on a live Steam)
+- **A download Steam resumes by itself at startup could fail with "Invalid content configuration".** Measured on 2026-11-19 (Debug trace): the `MarkLicenseAsChanged` + `ProcessPendingLicenseUpdates` that follows the initial injection ran 1.8 s before the resume, yet Steam's raw `CheckAppOwnership` answer for every lua app stayed "in no package" (`existInPkgs=0`) until a second refresh, from a `.lua` watcher thread 83 s later, turned it into "package 0" (`existInPkgs=1`) in under a second. While Steam's index was stale, `BuildDepotDependency` saw 0 depots for lua apps and the empty-list guard failed the resumed update. So it was not only a 2-second race: any depot build in that window was rejected. Why the first refresh misses is not known; it is the one made inside the `CheckAppOwnership` hook on a Steam thread, about 0.35 s after the license list arrives.
+  - **Reactive refresh.** The hook now classifies Steam's raw answer for each lua-declared id (before the override): "in no package" after the injection is stale, "in package 0" is fresh, answers from a real package are ignored. It only sets lock-free flags. One worker thread of our own, started once after the initial refresh, waits 250 ms and then repeats the refresh while stale answers keep coming and no fresh one has been seen: at most 5 refreshes, at least 1 s apart, so it ends within about 5.25 s. A healthy start (already fresh) refreshes nothing; a start with no lua lookups refreshes nothing.
+  - The refreshes made from our own threads (the worker and the `.lua`/config watchers) are now serialised by one mutex. The initial refresh inside the hook does not take it, so a Steam thread never waits on it.
+  - The empty-list guard (`ShouldRejectEmptyDepotList`) is unchanged.
+  - Pure logic in `Hook/ReactiveRefreshLogic.h` (`Classify`, `Signals`, `NextAction` and the worker loop `RunWorker` with the clock and the refresh injected), 19 tests in `reactive_refresh_logic_test`, also in the Linux logic-test job. Debug `package.log` lines: `Reactive refresh triggered for app X (attempt Y/5)`, the first stale and first fresh observation, and a summary (fresh after N refreshes, not needed, or gave up).
+
 ## [v1.5.1] - Unreleased
 
 ### Fixed
