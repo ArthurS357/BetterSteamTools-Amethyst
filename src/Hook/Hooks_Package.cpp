@@ -2,6 +2,8 @@
 #include "HookMacros.h"
 #include "Hooks_SteamUI.h"
 #include "PackageReconcileLogic.h"
+#include "Hook/InjectedOwnershipLogic.h"
+#include "OSTPlatform/include/SteamCredentialStore.h"
 #include "dllmain.h"
 #include "Utils/HookSupport/VehCommon.h"
 #include <algorithm>
@@ -36,6 +38,13 @@ namespace {
 
     constexpr PackageId_t kInjectedPackageId = 0;
     constexpr uint64_t kInjectedPkgAccessToken = 10660652434190618804ull;
+
+    AccountID_t ActiveAccountId() {
+        uint32_t id = 0;
+        std::wstring universe;
+        return OSTPlatform::SteamCredentialStore::GetActiveUser(id, universe)
+                   == OSTPlatform::SteamCredentialStore::Status::Ok ? id : 0;
+    }
 
     bool MarkLicenseAsChangedAndProcessUpdates() {
         if (!g_pCUser || !oMarkLicenseAsChanged || !oProcessPendingLicenseUpdates) {
@@ -238,10 +247,13 @@ namespace {
             // Diagnostics (Debug + log.level = "trace" only): Steam's own answer
             // before the override below, and which branch it takes.
             LOG_PACKAGE_TRACE("CheckAppOwnership: appId={} result={} pkg={} existInPkgs={} ownsLicense={} "
-                              "releaseState={} -> {}",
+                              "borrowed={} familyShared={} owner={} releaseState={} -> {}",
                               appId, result, pOwn ? pOwn->PackageId : 0,
                               pOwn ? pOwn->ExistInPackageNums : 0,
                               pOwn ? pOwn->bOwnsLicense : false,
+                              pOwn ? pOwn->bBorrowed : false,
+                              pOwn ? pOwn->bFamilyShared : false,
+                              pOwn ? pOwn->SteamId32 : 0,
                               pOwn ? static_cast<int>(pOwn->ReleaseState) : -1,
                               (result && pOwn && pOwn->ExistInPackageNums > 1)
                                   ? "actually owned (MarkOwned, real result)" : "injected (pkg 0, true)");
@@ -250,11 +262,13 @@ namespace {
                 LuaConfig::MarkOwned(appId);
                 pOwn->ReleaseState = EAppReleaseState::Released;
             } else {
-                pOwn->PackageId    = kInjectedPackageId;
-                pOwn->ReleaseState = EAppReleaseState::Released;
-                pOwn->bOwnsLicense = true; //This forces DLCs on steam family shared games that u dont own when adding their appid via .lua
-                // Setting this free flag to false will hide it from the library UI.
-                pOwn->bFreeLicense = false;
+                // Direct ownership through package 0; any lent-license marker Steam put on its own
+                // answer is cleared (InjectedOwnershipLogic.h). The account id is only looked up
+                // when there is a lender to replace: this runs on every CheckAppOwnership call.
+                const AccountID_t self = InjectedOwnershipLogic::ClaimsLentLicense(*pOwn) ? ActiveAccountId() : 0;
+                if (InjectedOwnershipLogic::MarkDirectOwnership(*pOwn, kInjectedPackageId, self))
+                    LOG_PACKAGE_DEBUG("CheckAppOwnership: appId={} answered as lent (borrowed/family-shared), "
+                                      "cleared; owner id now {}", appId, pOwn->SteamId32);
                 return true;
             }
         }

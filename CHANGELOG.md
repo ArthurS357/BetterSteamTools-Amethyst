@@ -1,5 +1,12 @@
 # Changelog
 
+## [v1.5.1] - Unreleased
+
+### Fixed
+- **Lua apps could be answered as lent ("from your Steam family library").** There is no fake license struct to classify: the injection extends Steam's own package 0 (`PackageInfo` has no owner field), and what the UI reads as "whose license" is the `AppOwnership` answer of the `CheckAppOwnership` hook. The hook set `PackageId`, `ReleaseState`, `bOwnsLicense` and `bFreeLicense` and left every other field as Steam wrote it, so when Steam's own answer already carried `bBorrowed` or `bFamilyShared` (with `SteamId32` naming the lender) the app came back "owned" but still flagged lent. The hook now clears both flags and, only when one was set, replaces the lender in `SteamId32` with the active account (read from the credential store only in that case; left alone when unknown). Pure logic in `Hook/InjectedOwnershipLogic.h`, 6 tests in `injected_ownership_logic_test`.
+- Scope: only our answer for a lua-declared app. Steam's server-side Family Sharing validation and the network messages are untouched (the v1.3.6 logout came from dropping those), the `AppOwnership` layout is unchanged, and the "actually owned" branch is unchanged.
+- **Not verified against a live Steam.** That Steam's answer carries those markers for the affected apps is a hypothesis: the existing trace log did not print them. `CheckAppOwnership`'s trace line (Debug build, `log.level = "trace"`) now includes `borrowed`, `familyShared` and `owner`, and a cleared marker logs at debug. If the tag stays, that trace shows which field it comes from. A stale `appinfo.vdf` (the "Invalid content configuration" case closed in v1.5.0) is a separate cause that this does not touch.
+
 ## [v1.5.0] - Unreleased
 
 Independence and stability. Scope and rationale: [docs/ROADMAP-v1.5.0.md](docs/ROADMAP-v1.5.0.md).
