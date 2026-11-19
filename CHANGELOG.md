@@ -1,5 +1,15 @@
 # Changelog
 
+## [v1.5.2] - Unreleased
+
+### Known issue (investigated, not fixed; no code change in this entry)
+- **A download Steam resumes by itself at startup can still fail with "Invalid content configuration" for lua apps.** Reproduced on a live Steam on 2026-11-19 (Debug build, `log.level = "trace"`, South Park: The Stick of Truth, app 213670, download paused before closing Steam). `content_log.txt` shows `Failed building depot dependency (Invalid content configuration)`; our log shows `BuildDepotDependency` seeing 0 depots for the app and the empty-list guard rejecting the call, as designed.
+  - Measured on that Steam: its raw `CheckAppOwnership` answer for the injected lua apps (213670 and about 450 others) stays "in no package" (`existInPkgs=0`) from startup on. Only apps already native to package 0 (the Steamworks Common Redistributables, 228983 and similar) answer "package 0". `AppIdVec` on our side is correct and sorted (the app is in the injected package, `sorted=true`).
+  - What did not help, all measured: (1) repeating `MarkLicenseAsChanged` + `ProcessPendingLicenseUpdates` from a thread of our own, 10 times, 1.5 s apart (about 19 s): no injected app ever turned fresh, two runs. An earlier version that stopped on the first "package 0" answer from any app was wrong too: a native app ended it after one refresh. (2) A refresh after a real change of the vector, from the `.lua` watcher about 1 min 50 s after startup (`NotifyLicenseChanged: 1 added`, a probe `.lua` created while Steam was running): Steam's next attempts at the app, 40 s later and again after a restart, failed the same way.
+  - Not understood: why a refresh from the `.lua` watcher 83 s after startup turned the same apps fresh in the first trace of 2026-11-19 (the observation that started this work; a manual Resume 2.5 min after startup then worked), and did not in the later runs. One difference is not ruled out: the first trace ran a v1.5.1 Debug build, the later runs ran the v1.5.2 test build with the extra refresh worker. A control run of the plain v1.5.1 build, repeating the "touch a `.lua` after about 80 s" step, was not done. In the later sessions Steam's own retries of the download also failed, so "click Resume" worked once, after the index had healed, and is not a reliable workaround.
+  - The attempt (a worker thread with a per-app latch and a 15 s budget) was not shipped: it does nothing measurable and was removed from this release. It is kept, with its tests, on the branch `v1.5.2-race-fix` (closed PR #7).
+  - Idea not tried, to be weighed for v1.5.3: when Steam returns 0 depots for a lua app, build the depot list ourselves from the `.lua` data instead of failing the call. It needs fields we do not have a source for (depot sizes) and the structure layout, so it is risky; it should start from a trace, not from a guess.
+
 ## [v1.5.1] - Unreleased
 
 ### Fixed
