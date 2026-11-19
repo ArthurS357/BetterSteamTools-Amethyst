@@ -415,11 +415,11 @@ struct CAppData
 		static constexpr uint8 kEmptySha1[sizeof(sha1Hash)] = {};
 		return memcmp(sha1Hash, kEmptySha1, sizeof(sha1Hash)) == 0;
 	}
-
-	bool IsUnresolvedAppInfo() const {
-		return HasEmptyAppInfoSha() && !bSkipFlag;
-	}
 };
+// One byte of this is written into Steam's memory (GateSkipLogic.h): pin the offsets the
+// license pass reads (steamclient64 sha 669fa08e: 0x9FA6xx compares [+0x14] and [+0x20..0x34)).
+static_assert(offsetof(CAppData, bSkipFlag) == 0x14, "CAppData::bSkipFlag moved");
+static_assert(offsetof(CAppData, sha1Hash) == 0x20, "CAppData::sha1Hash moved");
 
 #pragma pack(push,1)
 struct CSteamApp

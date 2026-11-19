@@ -130,6 +130,7 @@
 # PackageReconcileLogic.h (what NotifyLicenseChanged changes in the injected
 # AppIdVec) is header-only, with the config and the vector passed in as callables.
 # IndexRebuildLogic.h (mark-then-flag order and the handler message) likewise.
+# GateSkipLogic.h (raise skip_flag only for the license pass, put back what it raised) likewise.
 # ---------------------------------------------------------------------------
 
 include(GTestDep)   # our recipe: GTest::gtest_main / GTest::gmock (/MT)
@@ -169,6 +170,7 @@ add_executable(AmethystToolTests
     luaconfig_concurrency_test.cpp
     package_reconcile_logic_test.cpp
     index_rebuild_logic_test.cpp
+    gate_skip_logic_test.cpp
     pics_diagnostics_logic_test.cpp
     app_id_vec_order_logic_test.cpp
     injected_app_id_logic_test.cpp

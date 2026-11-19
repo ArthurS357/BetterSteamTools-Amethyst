@@ -3,6 +3,7 @@
 #include "Hooks_SteamUI.h"
 #include "PackageReconcileLogic.h"
 #include "Hook/AppIdVecOrderLogic.h"
+#include "Hook/GateSkipLogic.h"
 #include "Hook/IndexRebuildLogic.h"
 #include "Hook/InjectedAppIdLogic.h"
 #include "dllmain.h"
@@ -287,6 +288,55 @@ namespace {
     }
 
 
+    // ── The license pass's appinfo gate ──────────────────────────────────────
+    // Steam's RunFrame runs ProcessPendingLicenseUpdates when our trigger raises the flags.
+    // That pass rebuilds the ownership index only if every app of every licensed package has
+    // appinfo or is flagged "known unknown" (CAppData::bSkipFlag): it asks
+    // GetOrAddAppData(app) for each one and gives up at an empty-SHA, unflagged entry. The
+    // ids of the injected package that are really depot ids never get appinfo, so the pass
+    // would give up every time. While it runs, those entries are flagged; GateSkipLogic.h says
+    // why only then. Neither hook runs on any thread but the one inside the pass, for any
+    // longer than a flag read.
+    //
+    // The marks live on the pass's own stack and a trivial thread_local pointer reaches them:
+    // nothing is shared between threads, and a nested pass joins the outer window instead of
+    // closing it. ponytail: the CAppData pointers are kept until the pass ends. Steam frees an
+    // AppData only when the appinfo cache is purged, which nothing in the pass does (read:
+    // ProcessPendingLicenseUpdates, the first half of the index rebuild); not proven for the
+    // whole callee tree. Upgrade path: look each id up again before restoring.
+    thread_local GateSkipLogic::Marks<CAppData>* t_gate = nullptr;
+
+    HOOK_FUNC(ProcessPendingLicenseUpdates, bool, void* pUser) {
+        struct Window {
+            GateSkipLogic::Marks<CAppData> marks;
+            bool outermost;
+            Window() : outermost(t_gate == nullptr) { if (outermost) t_gate = &marks; }
+            ~Window() {
+                if (!outermost) return;
+                t_gate = nullptr;
+                [[maybe_unused]] const size_t raised = marks.Count();
+                marks.Restore();
+                LOG_PACKAGE_TRACE("License pass: skip_flag was raised on {} injected ids with no appinfo, then restored", raised);
+            }
+        } window;
+        const bool done = oProcessPendingLicenseUpdates(pUser);
+        LOG_PACKAGE_DEBUG("License pass finished: {}", done ? "ownership index rebuilt or nothing pending"
+                                                            : "stopped at the appinfo gate");
+        return done;
+    }
+
+    // The third argument is Steam's "look up only": nonzero returns null for an unknown app
+    // instead of adding it (4DF790: `test bpl,bpl / jne` straight to the epilogue). The gate
+    // passes 0, so it also creates the blank entry we then flag.
+    HOOK_FUNC(GetOrAddAppData, CAppData*, void* pCache, AppId_t appId, bool bLookupOnly) {
+        CAppData* pData = oGetOrAddAppData(pCache, appId, bLookupOnly);
+        if (t_gate &&
+            t_gate->Raise(pData, [appId] { return LuaConfig::HasDepot(appId, false); })) {
+            LOG_PACKAGE_TRACE("GetOrAddAppData: skip_flag raised for injected id {} (no appinfo)", appId);
+        }
+        return pData;
+    }
+
     HOOK_FUNC(CheckAppOwnership, bool, void* pObj, AppId_t appId, AppOwnership* pOwn) {
         if (!g_pCUser) {
             g_pCUser = pObj;
@@ -398,11 +448,21 @@ namespace Hooks_Package {
         HOOK_BEGIN();
         INSTALL_HOOK_C(CheckAppOwnership);
         HOOK_END();
+
+        // Optional, and in a transaction of their own: a failed attach here must not drop
+        // CheckAppOwnership with it. Without them the trigger still fires, and the index
+        // rebuilds as before whenever Steam's own appinfo update flags those ids.
+        HOOK_BEGIN();
+        INSTALL_HOOK_OPTIONAL_C(ProcessPendingLicenseUpdates);
+        INSTALL_HOOK_OPTIONAL_C(GetOrAddAppData);
+        HOOK_END();
     }
 
     void Uninstall() {
         UNHOOK_BEGIN();
         UNINSTALL_HOOK_C(CheckAppOwnership);
+        UNINSTALL_HOOK_C(ProcessPendingLicenseUpdates);
+        UNINSTALL_HOOK_C(GetOrAddAppData);
         UNHOOK_END();
     }
 
