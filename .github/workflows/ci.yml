@@ -41,6 +41,12 @@ jobs:
 
   analysis:
     name: Static analysis (clang-tidy)
+    # Disabled on the Windows runner: its LLVM is older than the MSVC STL expects, so every
+    # translation unit fails with "STL1000: Unexpected compiler version, expected Clang 22 or
+    # newer" and the job burns 15+ min on noise. The MSVC build job and the Linux logic tests
+    # still run. Run it locally instead: build with the ninja-multi preset, then
+    # `clang-tidy -p build <file>`. Re-enable once the runner ships a recent LLVM.
+    if: false
     runs-on: windows-latest
 
     steps:
