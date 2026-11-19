@@ -1,6 +1,25 @@
 # Changelog
 
+## [v1.5.3] - Unreleased
+
+### Fixed
+- **A download Steam resumes by itself at startup no longer fails with "Invalid content configuration" for lua apps** (the known issue recorded in v1.5.2). Two separate causes, both found by reading `steamclient64.dll` (sha256 `669fa08e…`; the RVAs below are for that build) and both needed:
+  - **The ownership index was never rebuilt after our injection.** `CheckAppOwnership` does not read package 0's `AppIdVec`; it reads a separate appId -> license index in `CUser`, which Steam rebuilds only from its own `RunFrame`, and only when a flag in `CUser` is set. `MarkLicenseAsChanged` never sets it. Steam's handler for "appinfo update finished" (RVA `0xA10BC0`) does, but only when that update reports at least one app: that is why every earlier observation healed only after `apps updated N>0`, and never on a start with `apps updated 0`. Now, after marking package 0 changed, we call that handler (found by an embedded signature that must match exactly once) with `{result 1, apps 1, packages 0}`. It only stores the flag word; Steam then runs `ProcessPendingLicenseUpdates` and the rebuild on its own thread. We no longer call `ProcessPendingLicenseUpdates` ourselves (it also ran on the `.lua` watcher thread, where a rebuild would race the readers of an unlocked tree).
+  - **The pass that rebuilds the index stops at an appinfo gate.** It asks for every app of every licensed package and gives up at the first one with an empty SHA and no skip flag. In the test set 243 of 482 ids were depot ids with no appinfo, so the pass never got past them (Steam normally flags them "known unknown" only on its full-data PICS pass, which is part of why it healed only after an update). While that pass runs, and only then, those entries get the skip flag (`GetOrAddAppData` + `ProcessPendingLicenseUpdates` hooks, both optional, in their own detour transaction), and exactly the flags we raised are put back when it returns. Raised for good, a freshly added real Lua game could read as "known unknown", and `MarkLicenseAsChanged` clears the flag for the whole package anyway.
+  - **Measured on a live Steam (2026-11-19, Debug build, `log.level = "trace"`, South Park 213670 partly downloaded and left that way when Steam was closed), on starts with `apps updated 0`, the case no earlier build healed:**
+    - The trigger alone (no gate hook), 2 starts: 213670 stayed `existInPkgs=0`; one start was watched for 2 min 13 s.
+    - With the gate hook, 2 starts: the pass raised the flag on 226 ids, `existInPkgs` went 0 -> 1 about 1.4 s and 1.5 s after the trigger, `BuildDepotDependency` saw 8 depots, and Steam's own auto-resume (`Priority Auto Update`) started the download with no error. 0 error lines in any log.
+    - Clearing `appinfo.vdf` (what the GUI's "clear content cache" does) also healed it, by the old route (`apps updated 469`); it was not involved in those two starts.
+  - **Limits, stated plainly:** two clean starts is a small sample. That the gate stops at an empty SHA with no flag is read from the disassembly and from the effect, not from Steam's source. The handler signature is embedded for this Steam build family; if it does not match, a warning is logged once, the trigger is skipped, and behavior is as in v1.5.1. If the gate hooks cannot be installed the trigger still fires. Clearing the content cache stays a valid fallback.
+  - Pure logic in `Hook/IndexRebuildLogic.h` and `Hook/GateSkipLogic.h`, 7 new tests. `PatternLoader::FindUniqueSignature` is new. The never-enabled `GetOrAddAppData` hook in `Hooks_Misc.cpp` and `CAppData::IsUnresolvedAppInfo` are removed; `bSkipFlag` and `sha1Hash` offsets are pinned by `static_assert`.
+- **Not done, by decision:** building `pDepotInfo` ourselves from the `.acf` (the idea left open in v1.5.2). Read against the disassembly it is unsafe (the `.acf` lists only depots already staged, the allocator it needs is not a verified interface) and the real cause was elsewhere.
+
+### Tests
+- `CompatAliasFileTest.ConcurrentApplyNeverExposesAPartialAliasOrLeavesTemps` failed about 1 in 10 Release runs (3 of 30 measured). It required one `Apply()` call to report both the DLL and the TOML as written, which does not hold when 8 threads race (the call that writes one can find the other already current). It now requires one reported write per alias; 0 of 200 runs fail. The code was right, the criterion was wrong (PR #9).
+
 ## [v1.5.2] - Unreleased
+
+> **Fixed in v1.5.3 (entry above).** What follows is the investigation as it stood at the time.
 
 ### Known issue (investigated, not fixed; no code change in this entry)
 - **A download Steam resumes by itself at startup can still fail with "Invalid content configuration" for lua apps.** Reproduced on a live Steam on 2026-11-19 (Debug build, `log.level = "trace"`, South Park: The Stick of Truth, app 213670, download paused before closing Steam). `content_log.txt` shows `Failed building depot dependency (Invalid content configuration)`; our log shows `BuildDepotDependency` seeing 0 depots for the app and the empty-list guard rejecting the call, as designed.
