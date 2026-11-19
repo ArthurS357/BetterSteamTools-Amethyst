@@ -135,6 +135,11 @@ The `extract_tickets` tool dumps the `AppTicket` and `ETicket` hex strings you n
 ### Online Fix
 - Add `-onlinefix` to the Steam launch parameters to enable 480-based online play in games that use lobby matchmaking. The current limitation is that only one such game can run at a time.To revert, simply remove -onlinefix from the launch parameters — online play returns to normal on the next launch.
 
+## Known issues
+
+### A download that Steam resumes by itself at startup can fail ("Invalid content configuration")
+If a download of a Lua-added game was paused or interrupted when Steam was closed, Steam may try to resume it at the next start and cancel it with "Invalid content configuration". Seen on a live Steam on 2026-11-19. The cause is on Steam's side of the ownership data (it reports the Lua apps as in no package at startup); a repeated license refresh from this tool did not change that in testing, and a retry inside the same session failed as well, so there is no verified workaround yet. Details and what was measured: the v1.5.2 entry in [CHANGELOG.md](CHANGELOG.md). Reports with a Debug `package.log` and `manifest.log` (`[log] level = "trace"`) help.
+
 ## Future
 - Steam Cloud synchronization support.(This is a huge project)
 
