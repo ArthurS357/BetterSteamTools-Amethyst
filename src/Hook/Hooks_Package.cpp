@@ -2,6 +2,8 @@
 #include "HookMacros.h"
 #include "Hooks_SteamUI.h"
 #include "PackageReconcileLogic.h"
+#include "Hook/AppIdVecOrderLogic.h"
+#include "Hook/InjectedAppIdLogic.h"
 #include "dllmain.h"
 #include "Utils/HookSupport/VehCommon.h"
 #include <algorithm>
@@ -61,6 +63,32 @@ namespace {
         return std::find(first, first + vec.m_Size, id) != first + vec.m_Size;
     }
 
+#ifdef OPENSTEAMTOOL_LOGGING_ENABLED
+    // Diagnostics (trace): is the injected package's AppIdVec in ascending order? Steam may look
+    // ids up in it with a binary search; nothing here reorders anything. One line per mutation,
+    // never the ids themselves (the vector has hundreds). `preExisting` is the size before this
+    // mutation's appends (0 = unknown, skips the per-part split). Caller holds g_appIdVecMutex.
+    void LogAppIdVecOrder(const char* when, const CUtlVector<AppId_t>& vec, uint32 preExisting) {
+        const AppId_t* p = vec.m_Memory.m_pMemory;
+        const auto all = AppIdVecOrderLogic::AnalyzeOrder(p, vec.m_Size);
+        if (all.Sorted()) {
+            LOG_PACKAGE_TRACE("AppIdVec after {} is sorted. Size: {}.", when, vec.m_Size);
+            return;
+        }
+        if (preExisting > 0 && preExisting < vec.m_Size) {
+            const auto before   = AppIdVecOrderLogic::AnalyzeOrder(p, preExisting);
+            const auto appended = AppIdVecOrderLogic::AnalyzeOrder(p + preExisting, vec.m_Size - preExisting);
+            LOG_PACKAGE_TRACE("AppIdVec is NOT sorted (after {}). Size: {}, inversions: {}, first at [{}]: {} > {}. "
+                              "Steam's own part [0,{}): {} inversion(s); appended part: {} inversion(s).",
+                              when, vec.m_Size, all.inversions, all.firstAt, all.firstPrev, all.firstNext,
+                              preExisting, before.inversions, appended.inversions);
+        } else {
+            LOG_PACKAGE_TRACE("AppIdVec is NOT sorted (after {}). Size: {}, inversions: {}, first at [{}]: {} > {}.",
+                              when, vec.m_Size, all.inversions, all.firstAt, all.firstPrev, all.firstNext);
+        }
+    }
+#endif
+
     // Caller holds g_appIdVecMutex.
     bool InjectConfiguredDepots(PackageInfo* pPkg) {
         // check package status before injecting
@@ -69,8 +97,12 @@ namespace {
             return false;
         }
 
-        // Inject all depots from config into the fake license. 
-        std::vector<AppId_t> appIds = LuaConfig::GetAllDepotIds();
+        // Inject all depots from config into the fake license.
+        [[maybe_unused]] const uint32 preExisting = pPkg->AppIdVec.m_Size;
+        // Only ids the vector does not hold yet (no duplicates), ascending. The whole vector is
+        // sorted in place below: Steam's own part is ascending and the vector must stay so.
+        std::vector<AppId_t> appIds = InjectedAppIdLogic::MissingIds(
+            pPkg->AppIdVec.m_Memory.m_pMemory, pPkg->AppIdVec.m_Size, LuaConfig::GetAllDepotIds());
         if (!appIds.empty()) {
             uint32 oldSize = pPkg->AppIdVec.m_Size;
             uint32 numToAdd = static_cast<uint32>(appIds.size());
@@ -82,6 +114,13 @@ namespace {
             for (uint32 i = 0; i < numToAdd; i++)
                 pPkg->AppIdVec.m_Memory.m_pMemory[oldSize + i] = appIds[i];
         }
+#ifdef OPENSTEAMTOOL_LOGGING_ENABLED
+        LogAppIdVecOrder("initial injection, before sort", pPkg->AppIdVec, preExisting);
+#endif
+        InjectedAppIdLogic::SortInPlace(pPkg->AppIdVec.m_Memory.m_pMemory, pPkg->AppIdVec.m_Size);
+#ifdef OPENSTEAMTOOL_LOGGING_ENABLED
+        LogAppIdVecOrder("initial injection, after sort", pPkg->AppIdVec, 0);
+#endif
         return true;
     }
 
@@ -304,6 +343,23 @@ namespace Hooks_Package {
         return ContainsAppId(pPkg->AppIdVec, id) ? InjectedState::Present : InjectedState::Absent;
     }
 
+    InjectedLayout GetInjectedLayout(AppId_t id) {
+        InjectedLayout out;
+        PackageInfo* pPkg = g_pInjectedPackageInfo;
+        if (!pPkg) return out;
+        std::scoped_lock lock(g_appIdVecMutex);
+        const AppId_t* p = pPkg->AppIdVec.m_Memory.m_pMemory;
+        const size_t   n = pPkg->AppIdVec.m_Size;
+        out.ready  = true;
+        out.size   = static_cast<uint32_t>(n);
+        out.sorted = AppIdVecOrderLogic::AnalyzeOrder(p, n).Sorted();
+        if (const auto pos = AppIdVecOrderLogic::PositionOf(p, n, id)) {
+            out.present = true;
+            out.pos     = static_cast<uint32_t>(*pos);
+        }
+        return out;
+    }
+
     void Install() {
         RESOLVE_C(CUtlMemoryGrow);
         RESOLVE_C(MarkLicenseAsChanged);
@@ -352,7 +408,11 @@ namespace Hooks_Package {
                               plan.removals.size(), plan.additions.size());
 
             for (AppId_t id : plan.removals) {
-                pPkg->AppIdVec.FindAndFastRemove(id);
+                // Order-preserving: FindAndFastRemove swaps the last element into the hole and
+                // unsorts the vector.
+                size_t size = pPkg->AppIdVec.m_Size;
+                InjectedAppIdLogic::RemoveKeepingOrder(pPkg->AppIdVec.m_Memory.m_pMemory, size, id);
+                pPkg->AppIdVec.m_Size = static_cast<uint32>(size);
                 LOG_PACKAGE_DEBUG("NotifyLicenseChanged: removed AppId {}", id);
             }
 
@@ -368,6 +428,11 @@ namespace Hooks_Package {
                     plan.additions.clear();
                 }
             }
+            if (!plan.additions.empty())   // additions were appended: put the vector back in order
+                InjectedAppIdLogic::SortInPlace(pPkg->AppIdVec.m_Memory.m_pMemory, pPkg->AppIdVec.m_Size);
+#ifdef OPENSTEAMTOOL_LOGGING_ENABLED
+            LogAppIdVecOrder("reconcile", pPkg->AppIdVec, 0);
+#endif
         }
 
         // An applied addition invalidates any UI removal that has not

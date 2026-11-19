@@ -100,17 +100,28 @@ namespace {
                     default:                                    return "license not ready";
                 }
             };
+            // Where each id sits in package 0's AppIdVec (index/size, "-" when absent) and whether
+            // the vector is ascending, in the order the ids are looked up here: the app, then the
+            // lua ids above it. Positions only, never the whole vector.
+            const auto layoutOf = [](AppId_t id) {
+                const auto l = Hooks_Package::GetInjectedLayout(id);
+                return std::make_pair(l.present ? std::to_string(l.pos) + "/" + std::to_string(l.size)
+                                                : std::string("-/") + std::to_string(l.size),
+                                      l.sorted);
+            };
+            const auto appLayout = layoutOf(AppId);
             LOG_MANIFEST_TRACE("BuildDepotDependency reject: app={} markedOwned={} inInjectedPkg={} "
-                               "sharedCount={}",
+                               "sharedCount={} AppIdVec pos={} sorted={}",
                                AppId, !LuaConfig::HasDepot(AppId, true), injected(AppId),
-                               pSharedDepotInfo ? pSharedDepotInfo->m_Size : 0);
+                               pSharedDepotInfo ? pSharedDepotInfo->m_Size : 0,
+                               appLayout.first, appLayout.second);
             const auto pins = LuaConfig::GetManifestOverrides();   // snapshot copy
             for (AppId_t id = AppId + 1; id <= AppId + 16; ++id) {
                 if (!LuaConfig::HasDepot(id, false)) continue;
                 LOG_MANIFEST_TRACE("BuildDepotDependency reject: app={} lua id={} markedOwned={} "
-                                   "inInjectedPkg={} manifestOverride={}",
+                                   "inInjectedPkg={} manifestOverride={} AppIdVec pos={}",
                                    AppId, id, !LuaConfig::HasDepot(id, true), injected(id),
-                                   pins.count(id) != 0);
+                                   pins.count(id) != 0, layoutOf(id).first);
             }
 #endif
             return false;

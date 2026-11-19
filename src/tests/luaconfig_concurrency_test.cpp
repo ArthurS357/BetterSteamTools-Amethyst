@@ -18,6 +18,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -402,4 +403,38 @@ TEST_F(LuaConfigConcurrency, VersionPinOutputLoadsAsManifestOverrides) {
 
     // The engine state is process-wide: leave no override behind for other tests.
     LuaConfig::UnloadFile(file);
+}
+
+// v1.5.1 diagnostics: GetAllDepotIds hands the ids back in the container's order, not ascending.
+// Hooks_Package appends them to package 0's AppIdVec as returned, so the vector is only as ordered
+// as this is. The order is unspecified (an unordered_map walk), so the test cannot assert "this
+// exact order"; it declares the same ids ascending in one file and descending in another and
+// asserts that they do not BOTH come back ascending, which holds for insertion order, reverse
+// insertion order and hash order alike. If a future change sorts the result here, this test is the
+// one to update.
+TEST_F(LuaConfigConcurrency, GetAllDepotIdsDoesNotGuaranteeAscendingOrder) {
+    constexpr uint32_t kCount = 48;
+    std::string asc, desc;
+    for (uint32_t i = 0; i < kCount; ++i) {
+        asc  += "addappid(" + std::to_string(7200000 + i) + ")\n";
+        desc += "addappid(" + std::to_string(7300000 + (kCount - 1 - i)) + ")\n";
+    }
+    const std::string ascFile  = WriteLua("order_asc.lua", asc);
+    const std::string descFile = WriteLua("order_desc.lua", desc);
+    LuaConfig::ParseFile(ascFile);
+    LuaConfig::ParseFile(descFile);
+
+    // The engine state is process-wide: keep only this test's ids, in the order they come back.
+    std::vector<uint32_t> fromAsc, fromDesc;
+    for (const uint32_t id : LuaConfig::GetAllDepotIds()) {
+        if (id >= 7200000 && id < 7200000 + kCount) fromAsc.push_back(id);
+        if (id >= 7300000 && id < 7300000 + kCount) fromDesc.push_back(id);
+    }
+    LuaConfig::UnloadFile(ascFile);
+    LuaConfig::UnloadFile(descFile);
+
+    ASSERT_EQ(fromAsc.size(), kCount);    // the same ids come back, in some order
+    ASSERT_EQ(fromDesc.size(), kCount);
+    EXPECT_FALSE(std::is_sorted(fromAsc.begin(), fromAsc.end()) &&
+                 std::is_sorted(fromDesc.begin(), fromDesc.end()));
 }

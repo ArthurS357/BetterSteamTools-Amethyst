@@ -117,6 +117,43 @@ message CMsgClientPICSProductInfoRequest {
 }
 
 // ============================================================
+// CMsgClientPICSProductInfoResponse  (eMsg 8904) -- parse-only, used for diagnostics
+// (field numbers per the public Steam protobufs; the hook checks that the reply's appids
+// are ones that were requested, which would expose a wrong number)
+// ============================================================
+message CMsgClientPICSProductInfoResponse {
+	message AppInfo {
+		optional uint32 appid = 1;
+		optional uint32 change_number = 2;
+		optional bool missing_token = 3;
+		optional bytes sha = 4;
+		optional bytes buffer = 5;
+		optional bool only_public = 6;
+		optional uint32 size = 7;
+	}
+
+	repeated .CMsgClientPICSProductInfoResponse.AppInfo apps = 1;
+	repeated uint32 unknown_appids = 2;
+	optional bool meta_data_only = 5;
+	optional bool response_pending = 6;
+	optional uint32 http_min_size = 7;
+	optional string http_host = 8;
+}
+
+// ============================================================
+// CMsgClientPICSAccessTokenResponse  (eMsg 8906) -- parse-only, used for diagnostics
+// ============================================================
+message CMsgClientPICSAccessTokenResponse {
+	message AppToken {
+		optional uint32 appid = 1;
+		optional uint64 access_token = 2;
+	}
+
+	repeated .CMsgClientPICSAccessTokenResponse.AppToken app_access_tokens = 3;
+	repeated uint32 app_denied_tokens = 4;
+}
+
+// ============================================================
 // CFamilyGroupsClient_NotifyRunningApps_Notification  (eMsg 147 target_job_name)
 // ============================================================
 message CFamilyGroupsClient_NotifyRunningApps_Notification {
