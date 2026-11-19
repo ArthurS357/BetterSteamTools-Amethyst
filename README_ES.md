@@ -29,6 +29,8 @@
   </p>
 </div>
 
+> **Traducción pendiente.** Este README en español puede no reflejar las novedades de la v1.5.0 (failover de manifiestos, `version_pin`, grabador de huellas, `pattern_migrate`). La referencia vigente es el [README.md en inglés](README.md); el [CHANGELOG](CHANGELOG.md) detalla los cambios.
+
 ## Acerca de este fork (Amethyst)
 
 AmethystTool es un fork de OpenSteamTools reforzado en privacidad. Diferencias de comportamiento respecto al upstream:
