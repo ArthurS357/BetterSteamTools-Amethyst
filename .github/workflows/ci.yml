@@ -41,6 +41,12 @@ jobs:
 
   analysis:
     name: Static analysis (clang-tidy)
+    # Disabled on the Windows runner: its LLVM is older than the MSVC STL expects, so every
+    # translation unit fails with "STL1000: Unexpected compiler version, expected Clang 22 or
+    # newer" and the job burns 15+ min on noise. The MSVC build job and the Linux logic tests
+    # still run. Run it locally instead: build with the ninja-multi preset, then
+    # `clang-tidy -p build <file>`. Re-enable once the runner ships a recent LLVM.
+    if: false
     runs-on: windows-latest
 
     steps:
@@ -69,7 +75,14 @@ jobs:
         continue-on-error: true
         run: |
           clang-tidy --version
-          $files = git ls-files 'src/*.cpp' | Where-Object { $_ -notmatch '^src/tests/' -and $_ -notmatch '^src/proto/' }
+          # Scope: v1.5.0 code only (SteamMetadata + its new tests). The legacy files are
+          # stable and made a full-tree run take 55 min. tools/*.cpp are EXCLUDE_FROM_ALL
+          # (not in compile_commands.json); their logic lives in the *Logic.h headers,
+          # reached through these tests.
+          $tests = 'ipc_embedded|module_section|manifest_failover_logic|pattern_(migrate|recorder|loader|refresh)|remote_toml|version_pin'
+          $files = git ls-files 'src/*.cpp' | Where-Object {
+            $_ -match '^src/Utils/SteamMetadata/' -or $_ -match "^src/tests/($tests)[a-z_]*_test\.cpp$"
+          }
           $failed = 0
           foreach ($f in $files) {
             Write-Host "::group::$f"

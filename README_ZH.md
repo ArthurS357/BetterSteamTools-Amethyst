@@ -34,6 +34,8 @@
   </p>
 </div>
 
+> **翻译待更新。** 本中文 README 可能未涵盖 v1.5.0 的新内容（清单提供方故障转移、`version_pin`、指纹记录器、`pattern_migrate`）。当前以[英文 README.md](README.md)为准；变更详情见 [CHANGELOG](CHANGELOG.md)。
+
 ## 关于本分支 Amethyst
 
 AmethystTool 是 OpenSteamTools 的一个注重隐私的分支。与上游的行为差异：

@@ -153,6 +153,21 @@ if (-not $SkipBuild) {
 }
 
 # ---------------------------------------------------------------------------
+# 1b. Offline CLIs (Release). They are EXCLUDE_FROM_ALL targets, so build.ps1 does not build
+#     them. Incremental, so cheap when already built. After build.ps1 the vcvars environment
+#     is already loaded in this process; with -SkipBuild cmake may not be on PATH, in which
+#     case the .exe files already in build\tools\Release are used as they are.
+# ---------------------------------------------------------------------------
+Write-Step 'Building offline CLIs (version_pin, pattern_migrate) - Release'
+if (Get-Command cmake -ErrorAction SilentlyContinue) {
+    & cmake --build $BuildDir --config Release --target version_pin pattern_migrate
+    if ($LASTEXITCODE -ne 0) { Fail "CLI build failed (exit $LASTEXITCODE)." }
+    Write-Ok 'CLIs built.'
+} else {
+    Write-Warn2 'cmake is not on PATH; using the CLI .exe files already in build\tools\Release, if any.'
+}
+
+# ---------------------------------------------------------------------------
 # 2. Collect artifacts
 # ---------------------------------------------------------------------------
 Write-Step 'Collecting release artifacts'
@@ -166,6 +181,8 @@ $artifacts = @(
     @{ Source = Join-Path $RepoRoot 'TESTING.md';                Dest = 'TESTING.md' }
     @{ Source = Join-Path $RepoRoot 'AV_WHITELIST.md';           Dest = 'AV_WHITELIST.md' }
     @{ Source = Join-Path $RepoRoot 'tools\enable-denuvo-compat.ps1'; Dest = 'enable-denuvo-compat.ps1' }
+    @{ Source = Join-Path $BuildDir 'tools\Release\version_pin.exe';     Dest = 'tools\version_pin.exe' }
+    @{ Source = Join-Path $BuildDir 'tools\Release\pattern_migrate.exe'; Dest = 'tools\pattern_migrate.exe' }
 )
 
 $missing = $artifacts | Where-Object { -not (Test-Path -LiteralPath $_.Source) }
@@ -191,7 +208,9 @@ if (Test-Path -LiteralPath $packageDir) {
 New-Item -ItemType Directory -Path $packageDir -Force | Out-Null
 
 foreach ($artifact in $artifacts) {
-    Copy-Item -LiteralPath $artifact.Source -Destination (Join-Path $packageDir $artifact.Dest) -Force
+    $destPath = Join-Path $packageDir $artifact.Dest
+    New-Item -ItemType Directory -Path (Split-Path -Parent $destPath) -Force | Out-Null
+    Copy-Item -LiteralPath $artifact.Source -Destination $destPath -Force
 }
 
 $installTxtSource = Join-Path $RepoRoot 'INSTALL.txt'
@@ -220,6 +239,10 @@ anti-cheat/anti-fraud systems look for.
 If your antivirus quarantines these DLLs, see AV_WHITELIST.md - this is a
 known, expected false positive for injection/hooking code, not a sign the
 files are unsafe.
+
+Offline tools (tools\ folder; they never touch Steam's process): version_pin.exe pins the
+installed version of a game, pattern_migrate.exe migrates recorded fingerprints to a newer Steam
+DLL. Run either with --help. See CHANGELOG.md.
 
 Denuvo tickets via LuaTools Validator: run enable-denuvo-compat.ps1 (or set
 [compatibility] denuvo_aliases = true) - see README.md, "Denuvo compatibility mode".
