@@ -425,6 +425,11 @@ namespace VersionPinLogic {
         std::string              lua;         // what was (or, with dryRun, would be) written
     };
 
+    // path::string() throws (system_error) when a name has a character the ANSI codepage cannot hold.
+    [[nodiscard]] inline std::string PathStr(const fs::path& p) {
+        try { return p.string(); } catch (...) { return "<unknown>"; }
+    }
+
     // Whole file, or nullopt when it is missing, unreadable, not a regular file or over `cap`.
     [[nodiscard]] inline std::optional<std::string> ReadSmallFile(const fs::path& path, std::uintmax_t cap) {
         std::error_code ec;
@@ -442,7 +447,7 @@ namespace VersionPinLogic {
     [[nodiscard]] inline std::vector<fs::path> ListAcfFiles(const fs::path& steamapps, std::error_code& ec) {
         std::vector<fs::path> files;
         for (fs::directory_iterator it(steamapps, ec), end; !ec && it != end; it.increment(ec)) {
-            const std::string name = it->path().filename().string();
+            const std::string name = PathStr(it->path().filename());
             std::error_code fileEc;
             if (name.starts_with("appmanifest_") && name.ends_with(".acf") && it->is_regular_file(fileEc))
                 files.push_back(it->path());
@@ -476,7 +481,7 @@ namespace VersionPinLogic {
                 for (const Conflict& c : FindConflicts(*text, pins.depots)) {
                     if (reported++ >= kMaxNotes) return;
                     r.warnings.push_back("depot " + std::to_string(c.depotId) + " is also pinned to " +
-                                         std::to_string(c.otherManifestId) + " in " + other.filename().string() +
+                                         std::to_string(c.otherManifestId) + " in " + PathStr(other.filename()) +
                                          "; the file parsed last wins");
                 }
             }
@@ -496,7 +501,7 @@ namespace VersionPinLogic {
         // "appmanifest_<N>.acf" -> N, when the name has that shape.
         inline std::optional<std::uint32_t> AppIdFromAcfName(const fs::path& acf) {
             constexpr std::string_view kPrefix = "appmanifest_", kSuffix = ".acf";
-            const std::string name = acf.filename().string();
+            const std::string name = PathStr(acf.filename());
             if (!name.starts_with(kPrefix) || !name.ends_with(kSuffix) || name.size() <= kPrefix.size() + kSuffix.size())
                 return std::nullopt;
             return ParseDecimal<std::uint32_t>(
@@ -529,7 +534,7 @@ namespace VersionPinLogic {
 
             const std::error_code ec = CompatAliasLogic::detail::WriteBytesViaTemp(
                 r.lua, r.file, CompatAliasLogic::detail::MakeTempTag(opt.processTag));
-            if (ec) return Fail(std::move(r), "could not write " + r.file.string() + ": " + ec.message());
+            if (ec) return Fail(std::move(r), "could not write " + PathStr(r.file) + ": " + ec.message());
             r.status = PinStatus::Written;
             r.message = action == WriteAction::Replace ? "replaced" : "written";
             return r;
@@ -541,7 +546,7 @@ namespace VersionPinLogic {
     // on filesystem errors; every failure comes back as a report with a message.
     [[nodiscard]] inline PinReport PinAcf(const fs::path& acfPath, const PinOptions& opt) {
         PinReport r;
-        const std::string acfName = acfPath.filename().string();
+        const std::string acfName = PathStr(acfPath.filename());
 
         const auto text = ReadSmallFile(acfPath, kMaxAcfBytes);
         if (!text) return detail::Fail(std::move(r), acfName + ": missing, unreadable or larger than the " + std::to_string(kMaxAcfBytes) + " byte limit");
@@ -569,7 +574,7 @@ namespace VersionPinLogic {
 
         std::error_code ec;
         if (!fs::is_directory(opt.outDir, ec))
-            return detail::Fail(std::move(r), "output directory not found: " + opt.outDir.string() + " (is AmethystTool installed? see --out-dir)");
+            return detail::Fail(std::move(r), "output directory not found: " + PathStr(opt.outDir) + " (is AmethystTool installed? see --out-dir)");
 
         detail::ScanForConflicts(opt, r.file, ex.pins, r);
 

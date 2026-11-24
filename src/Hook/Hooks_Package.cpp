@@ -347,7 +347,7 @@ namespace {
         TryInitFakeLicenseOnce();
         Hooks_Package::TryDumpOwnedDepots();
 
-        if (LuaConfig::HasDepot(appId,false)) {
+        if (pOwn && LuaConfig::HasDepot(appId,false)) {
             // Diagnostics (Debug + log.level = "trace" only): Steam's own answer
             // before the override below, and which branch it takes.
             LOG_PACKAGE_TRACE("CheckAppOwnership: appId={} result={} pkg={} existInPkgs={} ownsLicense={} "

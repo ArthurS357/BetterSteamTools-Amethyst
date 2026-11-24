@@ -207,7 +207,11 @@ void Start(const std::vector<std::string>& directories) {
     }
 
     g_watchDirs = directories;
-    g_watcherThread = std::thread(WatcherThread);
+    // An exception escaping a thread body calls std::terminate and would take Steam down.
+    g_watcherThread = std::thread([] {
+        try { WatcherThread(); }
+        catch (...) { LOG_ERROR("{}: watcher thread aborted by an exception", "Lua watcher"); }
+    });
 }
 
 void Stop() {
