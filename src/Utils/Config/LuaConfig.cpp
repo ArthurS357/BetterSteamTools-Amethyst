@@ -994,7 +994,7 @@ namespace LuaConfig{
             // Fail-safe: a writer holding the file mid-save must not unload the games
             // it contributed. A real deletion arrives as a Removed event (UnloadFile).
             LOG_WARN("ParseFile: failed to open {}, keeping any loaded version",
-                     path.filename().string());
+                     OSTPlatform::Encoding::PathToUtf8(path.filename()));
             return;
         }
 
@@ -1033,7 +1033,7 @@ namespace LuaConfig{
                 if (rc == LUA_OK) {
                     if (lua_pcall(L, 0, 0, 0) != LUA_OK) {
                         [[maybe_unused]] const char* err = lua_tostring(L, -1);
-                        LOG_WARN("{}:{}: {}", path.filename().string(), lineNo,
+                        LOG_WARN("{}:{}: {}", OSTPlatform::Encoding::PathToUtf8(path.filename()), lineNo,
                                  err ? err : "unknown");
                     }
                     chunk.clear();
@@ -1041,7 +1041,7 @@ namespace LuaConfig{
                     lua_pop(L, 1);
                 } else {
                     [[maybe_unused]] const char* err = lua_tostring(L, -1);
-                    LOG_WARN("{}:{}: {}", path.filename().string(), lineNo, err ? err : "unknown");
+                    LOG_WARN("{}:{}: {}", OSTPlatform::Encoding::PathToUtf8(path.filename()), lineNo, err ? err : "unknown");
                     lua_pop(L, 1);
                     chunk.clear();
                 }
@@ -1052,7 +1052,7 @@ namespace LuaConfig{
             // Zero lines counts: truncating is the first step of a non-atomic save.
             incomplete = lineNo == 0 || !chunk.empty() || file.bad();
             if (incomplete) {
-                LOG_WARN("{}: empty, or ends mid-statement", path.filename().string());
+                LOG_WARN("{}: empty, or ends mid-statement", OSTPlatform::Encoding::PathToUtf8(path.filename()));
             }
 
             // Check for manifest code functions after parsing. Each flag is stored
@@ -1105,7 +1105,7 @@ namespace LuaConfig{
 
         LogUnload(filePath, stats);
         if (keptPrevious) {
-            LOG_WARN("{}: keeping the previously loaded version", path.filename().string());
+            LOG_WARN("{}: keeping the previously loaded version", OSTPlatform::Encoding::PathToUtf8(path.filename()));
         }
     }
 

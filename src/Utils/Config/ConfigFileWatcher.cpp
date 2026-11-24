@@ -147,7 +147,11 @@ void Start(const std::string& configPath, const std::string& defaultLuaDir) {
 
     g_configPath = configPath;
     g_defaultLuaDir = defaultLuaDir;
-    g_watcherThread = std::thread(WatcherThread);
+    // An exception escaping a thread body calls std::terminate and would take Steam down.
+    g_watcherThread = std::thread([] {
+        try { WatcherThread(); }
+        catch (...) { LOG_ERROR("{}: watcher thread aborted by an exception", "Config watcher"); }
+    });
 }
 
 void Stop() {
