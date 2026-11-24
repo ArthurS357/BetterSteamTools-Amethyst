@@ -1,5 +1,15 @@
 # Changelog
 
+## [v1.5.4] - Hotfix
+
+Replaces the published v1.5.3: same behavior, plus three crash paths found by a read-only audit of it (no CRITICAL or HIGH finding). Only the DLL changes.
+
+### Fixed
+- **`CheckAppOwnership` no longer dereferences a null `AppOwnership`.** The lua override is skipped when Steam passes null; the original result is returned.
+- **A `.lua` or `.acf` file name with a character outside the ANSI codepage can no longer throw.** `path::string()` throws `system_error` on MSVC in that case (reproduced with ACP 1252). `LuaConfig.cpp` now uses `PathToUtf8`; `VersionPinLogic.h` uses a guarded `PathStr` that falls back to `<unknown>`. In the DLL this only happened in Debug builds (the logging that formatted the name is compiled out of Release); `version_pin` was affected in any build.
+- **The `.lua` and config watcher threads can no longer take Steam down.** An exception escaping a `std::thread` body calls `std::terminate`; both bodies now catch everything and log it.
+- Verified: 668/668 tests in Release and Debug, warnings 9/8, `TokeerUri` at ordinal 1, static `/MT`. No new test: the `path::string()` throw needs a non-ACP name on Windows, and the logic tests also run on Linux.
+
 ## [v1.5.3] - Unreleased
 
 ### Fixed
