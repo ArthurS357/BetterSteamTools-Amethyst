@@ -21,6 +21,36 @@
 
 namespace PatternRecorder {
 
+std::optional<std::vector<std::uint8_t>> ReadDllVerified(const std::filesystem::path& dll, const std::string& sha256,
+                                                         std::string* error)
+{
+    using PatternRecorderLogic::kMaxFileBytes;
+    const auto fail = [error](const char* why) -> std::optional<std::vector<std::uint8_t>> {
+        if (error) *error = why;
+        return std::nullopt;
+    };
+
+    std::error_code ec;
+    const std::uintmax_t size = std::filesystem::file_size(dll, ec);
+    if (ec) return fail("cannot stat the DLL");
+    if (size == 0 || size > kMaxFileBytes) return fail("the DLL size is outside the supported range");
+
+    // The file is read ONCE, into one buffer, and the caller slices that buffer: the bytes
+    // that are hashed are the bytes that get parsed.
+    std::ifstream in(dll, std::ios::binary);
+    if (!in) return fail("cannot open the DLL");
+    std::vector<std::uint8_t> all(static_cast<std::size_t>(size));
+    in.read(reinterpret_cast<char*>(all.data()), static_cast<std::streamsize>(all.size()));
+    if (in.gcount() != static_cast<std::streamsize>(all.size())) return fail("cannot read the whole DLL");
+
+    // `sha256` is what the pattern loader computed seconds earlier. If Steam replaced the DLL
+    // since, these bytes belong to another build, and a file named after the old hash would
+    // describe the wrong one.
+    if (OSTPlatform::Hash::Sha256OfBuffer(all.data(), all.size()) != sha256)
+        return fail("the DLL no longer matches its SHA-256 (replaced since it was hashed)");
+    return all;
+}
+
 std::optional<std::string> BuildFingerprintFile(const std::filesystem::path& dll, const std::string& component,
                                                 const std::string& sha256,
                                                 const std::vector<PatternMigrateLogic::NamedRva>& resolved,
@@ -36,26 +66,14 @@ std::optional<std::string> BuildFingerprintFile(const std::filesystem::path& dll
     if (!IsSafeComponent(component) || !IsSha256Hex(sha256))
         return fail("component or sha256 is not a safe path segment");
 
-    std::error_code ec;
-    const std::uintmax_t size = std::filesystem::file_size(dll, ec);
-    if (ec) return fail("cannot stat the DLL");
-    if (size == 0 || size > kMaxFileBytes) return fail("the DLL size is outside the supported range");
+    std::string why;
+    const std::optional<std::vector<std::uint8_t>> all = ReadDllVerified(dll, sha256, &why);
+    if (!all) {
+        if (error) *error = why;
+        return std::nullopt;
+    }
 
-    // The file is read ONCE, into one buffer, and everything below slices that buffer: the
-    // bytes that are hashed, parsed and fingerprinted are the same bytes.
-    std::ifstream in(dll, std::ios::binary);
-    if (!in) return fail("cannot open the DLL");
-    std::vector<std::uint8_t> all(static_cast<std::size_t>(size));
-    in.read(reinterpret_cast<char*>(all.data()), static_cast<std::streamsize>(all.size()));
-    if (in.gcount() != static_cast<std::streamsize>(all.size())) return fail("cannot read the whole DLL");
-
-    // The output is named after the SHA-256 the pattern loader computed seconds earlier. If
-    // Steam replaced the DLL since, these bytes belong to another build and recording them
-    // under the old name would put a wrong fingerprint where "already recorded" keeps it.
-    if (OSTPlatform::Hash::Sha256OfBuffer(all.data(), all.size()) != sha256)
-        return fail("the DLL no longer matches its SHA-256 (replaced since it was hashed)");
-
-    const std::span<const std::uint8_t> file(all);
+    const std::span<const std::uint8_t> file(*all);
     const std::optional<PeLayout> layout = ParsePeLayout(file.first(std::min(file.size(), kHeaderWindow)), file.size());
     if (!layout) return fail("not a PE32+ x64 image with a usable .text and exception directory");
 

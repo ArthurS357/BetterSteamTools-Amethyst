@@ -6,11 +6,13 @@
 #include "Utils/Config/Config.h"
 #include "Utils/Logging/Log.h"
 #include "Utils/SteamMetadata/PatternLoaderLogic.h"
+#include "Utils/SteamMetadata/PatternMigrateCliLogic.h"
 #include "Utils/SteamMetadata/PatternRecorder.h"
 #include "Utils/SteamMetadata/PatternRecorderLogic.h"
 #include "Utils/SteamMetadata/PatternRefreshLogic.h"
 #include "Utils/SteamMetadata/RemoteToml.h"
 #include "Utils/SteamMetadata/RemoteTomlLogic.h"
+#include "Utils/SteamMetadata/RuntimeMigrateLogic.h"
 #include "Utils/SteamMetadata/SteamDiagnostics.h"
 #include "Utils/Support/FnvHash.h"
 
@@ -19,7 +21,11 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <future>
+#include <iterator>
+#include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -228,7 +234,9 @@ static void ShowDownloadFailedPopup(const std::string& dllName,
         "       <Steam>\\amethysttool\\pattern\\" + component + "\\" + sha256 + ".toml\n"
         "  3. Check upstream:\n"
         "       https://github.com/madoiscool/steam-monitor/tree/pattern/" + component + "\n"
-        "  4. Consult the AmethystTool README and include the diagnostics below.");
+        "  4. Consult the AmethystTool README and include the diagnostics below.\n\n"
+        "Tip: with [shadow] record = true in amethysttool.toml, AmethystTool can migrate\n"
+        "the signatures by itself after the NEXT Steam update ([shadow] auto_migrate).");
 }
 
 } // namespace
@@ -253,6 +261,7 @@ struct LoadInfo {
     bool        fromCache     = false;
     bool        cacheFallback = false;
     std::string cachedBody;   // kept only for a cache hit; revalidation diffs against it
+    bool        autoMigrated  = false;   // map came from a runtime migration (fresh or stopgap)
 };
 
 // Guards g_loadInfo, g_requiredMisses and g_resolved. FindPattern normally runs on the
@@ -428,18 +437,228 @@ void Revalidate(const RevalidationJob& job, bool enabled)
         "Restart Steam to apply it.");
 }
 
+// ---- runtime pattern migration (v1.6.0) ----
+// Policy and rationale: Utils/SteamMetadata/RuntimeMigrateLogic.h.
+
+struct MigrateJob {
+    std::string              component;
+    std::string              sha256;           // of the DLL being loaded
+    std::string              dllPath;          // UTF-8
+    std::filesystem::path    fingerprintDir;   // <Steam>\amethysttool\fingerprint\<component>
+    std::filesystem::path    target;           // the cache entry for sha256
+    std::vector<std::string> candidates;       // fingerprint file stems, best first
+};
+
+std::vector<std::string> ListFingerprintCandidates(const std::filesystem::path& dir, const std::string& sha256)
+{
+    namespace fs = std::filesystem;
+    std::vector<RuntimeMigrateLogic::FingerprintOnDisk> files;
+    std::error_code ec;
+    for (fs::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
+        std::error_code fileEc;
+        const fs::path& p = it->path();
+        if (p.extension() != L".toml" || !it->is_regular_file(fileEc)) continue;
+        const fs::file_time_type t = fs::last_write_time(p, fileEc);
+        if (fileEc) continue;
+        files.push_back({ OSTPlatform::Encoding::PathToUtf8(p.stem()),
+                          static_cast<std::int64_t>(t.time_since_epoch().count()) });
+    }
+    return RuntimeMigrateLogic::OrderCandidates(std::move(files), sha256);
+}
+
+std::optional<std::string> ReadCappedFile(const std::filesystem::path& p, std::size_t maxBytes)
+{
+    std::error_code ec;
+    const std::uintmax_t size = std::filesystem::file_size(p, ec);
+    if (ec || size == 0 || size > maxBytes) return std::nullopt;
+    std::ifstream in(p, std::ios::binary);
+    if (!in) return std::nullopt;
+    // Exactly `size` bytes: a file that grows after the stat is not read past the cap.
+    std::string body(static_cast<std::size_t>(size), '\0');
+    in.read(body.data(), static_cast<std::streamsize>(body.size()));
+    if (in.gcount() != static_cast<std::streamsize>(body.size())) return std::nullopt;
+    return body;
+}
+
+// Worker thread. Returns the new pattern TOML, already written to the cache when possible.
+std::optional<std::string> RunAutoMigration(const MigrateJob& job)
+{
+    namespace fs = std::filesystem;
+    using namespace RuntimeMigrateLogic;
+    const auto start = std::chrono::steady_clock::now();
+
+    // The bytes migrated against are the bytes of the build that was hashed (and loaded).
+    std::string why;
+    const std::optional<std::vector<std::uint8_t>> dll =
+        PatternRecorder::ReadDllVerified(OSTPlatform::Encoding::Utf8ToPath(job.dllPath), job.sha256, &why);
+    if (!dll) {
+        LOG_WARN("PatternLoader: {} auto-migration skipped: {}", job.component, why);
+        return std::nullopt;
+    }
+    const std::optional<PatternMigrateLogic::ImageView> img = PatternMigrateCliLogic::MakeImageView(*dll, why);
+    if (!img) {
+        LOG_WARN("PatternLoader: {} auto-migration skipped: {}", job.component, why);
+        return std::nullopt;
+    }
+
+    const Attempt a = FirstAccepted(
+        job.candidates, job.component, *img,
+        [&](const std::string& stem) {
+            return ReadCappedFile(job.fingerprintDir / OSTPlatform::Encoding::Utf8ToPath(stem + ".toml"),
+                                  PatternMigrateCliLogic::kMaxFingerprintFileBytes);
+        },
+        [] { return std::chrono::steady_clock::now(); }, start + kWorkBudget,
+        [&]([[maybe_unused]] const std::string& stem, [[maybe_unused]] const Attempt& refused) {
+            LOG_INFO("PatternLoader: {} fingerprint {} not usable: {}", job.component, stem, refused.why);
+        });
+    if (!a.accepted) {
+        LOG_WARN("PatternLoader: {} auto-migration found nothing usable ({}); waiting for the mirrors as before",
+                 job.component, a.why);
+        return std::nullopt;
+    }
+
+    // The parser Load uses: what gets cached must load with exactly the migrated entries.
+    std::string parseErr;
+    const PatternMap map = ParsePatternString(a.body, &parseErr);
+    if (map.size() != a.migrated) {
+        LOG_ERROR("PatternLoader: {} auto-migrated file does not load back ({} of {} entries{}{}); discarded",
+                  job.component, map.size(), a.migrated, parseErr.empty() ? "" : ", ", parseErr);
+        return std::nullopt;
+    }
+
+    switch (Persist(job.target, a.body,
+                    [](const fs::path& t, const std::string& b) { return RemoteToml::ReplaceCacheFile(t, b); })) {
+        case PersistResult::Written:
+            LOG_INFO("PatternLoader: {} auto-migrated pattern file written to {}", job.component,
+                     OSTPlatform::Encoding::PathToUtf8(job.target));
+            break;
+        case PersistResult::TargetExists:
+            LOG_WARN("PatternLoader: {} cache entry appeared meanwhile; left as it is (this session uses the "
+                     "migrated copy)", job.component);
+            break;
+        case PersistResult::WriteFailed:
+            LOG_WARN("PatternLoader: {} auto-migrated file could not be written; this session uses it, the "
+                     "next start migrates again", job.component);
+            break;
+    }
+
+    [[maybe_unused]] const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - start).count();
+    LOG_INFO("PatternLoader: {} auto-migrated {} of {} function(s) in {} ms", job.component, a.migrated, a.total, ms);
+    return a.body;
+}
+
+// Init thread, after a cache miss and a mirror miss. Runs the migration on a worker with
+// a time limit: a slow or failing migration never holds Steam's start for more than
+// kWaitBudget, and never takes it down (every exception stops at the worker's edge).
+std::optional<std::string> TryAutoMigrate(const RemoteToml::Request& request, const std::string& sha256)
+{
+    using namespace RuntimeMigrateLogic;
+    if (!Config::GetShadowAutoMigrate()) {
+        LOG_INFO("PatternLoader: {} auto-migration off ([shadow] auto_migrate = false)", request.component);
+        return std::nullopt;
+    }
+
+    MigrateJob job;
+    job.component      = request.component;
+    job.sha256         = sha256;
+    job.dllPath        = request.dllPath;
+    job.fingerprintDir = RemoteToml::CachePathFor(
+        RemoteToml::Request{ "fingerprint", request.component, request.dllPath }, sha256).parent_path();
+    job.target         = RemoteToml::CachePathFor(request, sha256);
+    job.candidates     = ListFingerprintCandidates(job.fingerprintDir, sha256);
+    if (job.candidates.empty()) {
+        LOG_INFO("PatternLoader: {} has no recorded fingerprint to migrate from ([shadow] record = true "
+                 "makes one for the next Steam update)", request.component);
+        return std::nullopt;
+    }
+    LOG_INFO("PatternLoader: {} has no pattern file for this build; migrating from {} recorded fingerprint(s)",
+             request.component, job.candidates.size());
+
+    auto done = std::make_shared<std::promise<std::optional<std::string>>>();
+    std::future<std::optional<std::string>> result = done->get_future();
+    try {
+        std::thread([job = std::move(job), done]() {
+            std::optional<std::string> body;
+            try {
+                body = RunAutoMigration(job);
+            } catch (...) {
+                LOG_ERROR("PatternLoader: {} auto-migration aborted by an exception; nothing written",
+                          job.component);
+            }
+            try { done->set_value(std::move(body)); } catch (...) {}
+        }).detach();
+    } catch (...) {
+        LOG_ERROR("PatternLoader: could not start the auto-migration worker; skipped");
+        return std::nullopt;
+    }
+
+    if (result.wait_for(kWaitBudget) != std::future_status::ready) {
+        LOG_WARN("PatternLoader: {} auto-migration still running after {} s; this session starts without it, "
+                 "a file it writes is used on the next start", request.component, kWaitBudget.count());
+        return std::nullopt;
+    }
+    try {
+        return result.get();
+    } catch (...) {
+        return std::nullopt;
+    }
+}
+
 } // namespace
 
 bool Load(OSTPlatform::DynamicLibrary::ModuleHandle module, const std::string& dllPath, const std::string& component)
 {
-    // Delegate fetch + cache + mirror fallback to RemoteToml.
+    // Cache first, the mirrors on a miss (RemoteToml). An auto-migrated cache file is only
+    // a stopgap (v1.6.0): the mirrors are asked again, and their file replaces it; when
+    // they all fail, FetchOnMiss falls back to it.
     const RemoteToml::Request request{ kPatternChannel, component, dllPath };
-    RemoteToml::Result r = RemoteToml::Fetch(request);
+    RemoteToml::Result r = RemoteToml::LoadCached(request);
+    bool stopgap = false;
+    if (r.ok && RuntimeMigrateLogic::IsAutoMigrated(r.body)) {
+        // Only a mirror body that parses replaces the stopgap: FetchOnMiss would write any
+        // HTTP 200 (a captive portal page, say) over it unparsed, and that junk would then
+        // be a cache hit that never lets the migration run again.
+        LOG_INFO("PatternLoader: cached TOML for {} was auto-migrated; asking the mirrors for the published one",
+                 component);
+        stopgap = true;
+        RemoteToml::RemoteBody fresh = RemoteToml::FetchRemoteOnly(
+            request, r.sha256,
+            PatternRefreshLogic::kCorruptCacheRefetchTimeoutMs,
+            PatternRefreshLogic::kCorruptCacheRefetchRecvTimeoutMs);
+        if (fresh.ok && !RuntimeMigrateLogic::IsAutoMigrated(fresh.body) && !ParsePatternString(fresh.body).empty()) {
+            if (!RemoteToml::ReplaceCacheFile(RemoteToml::CachePathFor(request, r.sha256), fresh.body))
+                LOG_WARN("PatternLoader: could not replace the auto-migrated cache file for {}", component);
+            r.body      = std::move(fresh.body);
+            r.fromCache = false;
+            stopgap     = false;
+            LOG_INFO("PatternLoader: published TOML for {} found at {}; it replaces the auto-migrated one",
+                     component, fresh.url);
+        } else {
+            r.cacheFallback = true;   // the network was tried and gave nothing better
+        }
+    } else if (!r.ok && !r.sha256.empty()) {
+        r = RemoteToml::FetchOnMiss(request, r.sha256);
+    }
 
     // L-2: drop temp files a crash left between ReplaceCacheFile's write and its
-    // rename. Safe here: Load runs on the init thread before any revalidation
-    // worker exists, so no live temp file can be in this directory.
+    // rename. Safe here: Load runs on the init thread before any revalidation or
+    // migration worker for this component exists, so no live temp file can be in
+    // this directory.
     RemoveOrphanTempFiles(RemoteToml::CachePathFor(request, r.sha256).parent_path());
+
+    // Neither the cache nor a mirror: migrate from a recorded fingerprint before giving up.
+    // Failing that, the behaviour is the old one (popup, module's hooks off).
+    bool autoMigrated = false;
+    if (!r.ok && !r.sha256.empty()) {
+        if (std::optional<std::string> body = TryAutoMigrate(request, r.sha256)) {
+            r.ok            = true;
+            r.body          = std::move(*body);
+            r.fromCache     = false;
+            r.cacheFallback = false;
+            autoMigrated    = true;
+        }
+    }
 
     if (r.ok) {
         std::string parseErr;
@@ -477,7 +696,8 @@ bool Load(OSTPlatform::DynamicLibrary::ModuleHandle module, const std::string& d
         if (!map.empty()) {
             LOG_INFO("PatternLoader: loaded {} patterns for {} ({})",
                      map.size(), component,
-                     RemoteTomlLogic::DescribeLoadSource(r.fromCache, r.cacheFallback));
+                     autoMigrated ? "auto-migrated from a recorded fingerprint"
+                                  : RemoteTomlLogic::DescribeLoadSource(r.fromCache, r.cacheFallback));
             {
                 std::lock_guard<std::mutex> lock(g_revalidateMutex);
                 LoadInfo info;
@@ -486,6 +706,7 @@ bool Load(OSTPlatform::DynamicLibrary::ModuleHandle module, const std::string& d
                 info.sha256        = r.sha256;
                 info.fromCache     = r.fromCache;
                 info.cacheFallback = r.cacheFallback;
+                info.autoMigrated  = autoMigrated || stopgap;
                 if (r.fromCache && !r.cacheFallback) info.cachedBody = r.body;
                 g_loadInfo[module] = std::move(info);
             }
@@ -708,6 +929,13 @@ void StartShadowRecording()
     {
         std::lock_guard<std::mutex> lock(g_revalidateMutex);
         for (const auto& [module, info] : g_loadInfo) {
+            // Migrated RVAs are unreviewed: recorded as this build's fingerprint they would
+            // become ground truth for every later migration, and "already recorded" would
+            // keep them even after the published file arrives.
+            if (info.autoMigrated) {
+                LOG_INFO("PatternRecorder: {} skipped: running on an auto-migrated pattern file", info.component);
+                continue;
+            }
             Snapshot s;
             s.component = info.component;
             s.sha256    = info.sha256;

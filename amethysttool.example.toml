@@ -292,3 +292,17 @@ denuvo_aliases = false
 #   build; later launches only check that the file exists.
 # - Read at Steam startup (not hot-reloaded).
 record = false
+
+# Runtime pattern migration (v1.6.0). ON by default, but it only ever does something
+# when BOTH hold: the running Steam DLL has no pattern TOML in the cache or on any
+# mirror (a fresh Steam update), AND record = true above left a fingerprint for an
+# earlier build. Then, at startup, AmethystTool runs the same engine as
+# tools\pattern_migrate (up to 3 fingerprint files, newest first; a result is used only
+# if at least half of the recorded functions migrated), writes
+#   <Steam>\amethysttool\pattern\<component>\<sha256>.toml
+# (never over an existing file) and installs the hooks from it in this same start.
+# Steam's start waits at most 15 s for it; if it takes longer, the file is used on the
+# next start. The file is marked as auto-migrated: the mirrors are still asked on every
+# start, and the published file replaces it as soon as it exists.
+# false = the pre-v1.6.0 behaviour exactly (popup, that DLL's hooks disabled).
+auto_migrate = true

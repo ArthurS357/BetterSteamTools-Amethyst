@@ -74,6 +74,7 @@ namespace Config {
     bool GetUpdateEnabled();
     bool GetCompatDenuvoAliases();
     bool GetShadowRecord();
+    bool GetShadowAutoMigrate();
 
     // [manifest] — provider selection and `failover` live in ManifestClient (table-driven).
     inline uint32_t manifestTimeoutResolve = 5000;
@@ -153,5 +154,11 @@ namespace Config {
     // reads them at runtime. They exist so a maintainer can later run
     // tools/pattern_migrate. See PatternRecorderLogic.h.
     inline bool shadowRecord = false;
+
+    // [shadow] auto_migrate (v1.6.0) - ON by default. When neither the cache nor a mirror
+    // has a pattern TOML for the running Steam DLL, migrate one at startup from a
+    // fingerprint the recorder left for an earlier build (RuntimeMigrateLogic.h). Does
+    // nothing unless such a fingerprint exists. false = the old behaviour exactly.
+    inline bool shadowAutoMigrate = true;
 
 }

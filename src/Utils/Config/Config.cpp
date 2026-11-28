@@ -61,6 +61,8 @@ namespace {
         bool compatDenuvoAliases = false;
         // [shadow] record -- false = the pattern fingerprint recorder never runs.
         bool shadowRecord = false;
+        // [shadow] auto_migrate -- false = no runtime pattern migration, ever.
+        bool shadowAutoMigrate = true;
     };
 
     std::mutex g_mutex;
@@ -111,6 +113,7 @@ namespace {
         donate                 = snapshot.donate;
         compatDenuvoAliases    = snapshot.compatDenuvoAliases;
         shadowRecord           = snapshot.shadowRecord;
+        shadowAutoMigrate      = snapshot.shadowAutoMigrate;
     }
 
     void ApplyManifestProvider(const std::string& provider) {
@@ -321,6 +324,8 @@ namespace {
             if (auto shadow = tbl["shadow"].as_table()) {
                 if (auto val = (*shadow)["record"].value<bool>())
                     snapshot.shadowRecord = *val;
+                if (auto val = (*shadow)["auto_migrate"].value<bool>())
+                    snapshot.shadowAutoMigrate = *val;
             }
 
             ApplyManifestProvider(snapshot.manifestProvider);
@@ -431,6 +436,11 @@ namespace {
     bool GetShadowRecord() {
         const std::lock_guard lock(g_mutex);
         return shadowRecord;
+    }
+
+    bool GetShadowAutoMigrate() {
+        const std::lock_guard lock(g_mutex);
+        return shadowAutoMigrate;
     }
 
     bool GetCompatDenuvoAliases() {

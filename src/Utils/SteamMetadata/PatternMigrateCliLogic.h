@@ -2,6 +2,7 @@
 
 #include "Utils/SteamMetadata/PatternMigrateLogic.h"
 #include "Utils/SteamMetadata/PatternRecorderLogic.h"
+#include "Utils/Support/FnvHash.h"
 
 #include <algorithm>
 #include <charconv>
@@ -152,18 +153,70 @@ namespace PatternMigrateCliLogic {
         return out;
     }
 
-    // An old pattern TOML (the steam-monitor format): every `[Name]` table is a required
-    // function. Only table headers are read; rva/sig of the old build are irrelevant.
+    namespace detail {
+        // "0x82428E37": the table key PatternLoader reads (Fnv1aHash of the name).
+        [[nodiscard]] inline bool IsHexKey(std::string_view s) noexcept
+        {
+            if (s.size() < 3 || s.size() > 10 || s[0] != '0' || (s[1] != 'x' && s[1] != 'X')) return false;
+            return std::all_of(s.begin() + 2, s.end(), [](char c) {
+                return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+            });
+        }
+
+        [[nodiscard]] inline std::string HexKey(std::uint32_t v)
+        {
+            static constexpr char kDigits[] = "0123456789ABCDEF";
+            std::string s = "0x00000000";
+            for (std::size_t i = 0; i < 8; ++i) s[9 - i] = kDigits[(v >> (4 * i)) & 0xF];
+            return s;
+        }
+
+        [[nodiscard]] inline std::optional<std::string> ParseQuoted(std::string_view v);
+    } // namespace detail
+
+    // An old pattern TOML (the steam-monitor format PatternLoader reads): one table per
+    // function, keyed by the FNV-1a hash of its name, with the name in `name = "..."`:
+    //   [0xC37F2D8E]
+    //   name = "BuildDepotDependency"
+    // Each table is a required function. A table without a `name` line is a required
+    // function only if its header is a plain name (`[BuildDepotDependency]`); a bare hash
+    // key cannot be turned back into a name and is skipped. rva/sig are irrelevant here.
     [[nodiscard]] inline std::optional<std::vector<std::string>> ParseRequiredFromPatternToml(std::string_view text)
     {
         std::vector<std::string> out;
         bool bad = false;
+        bool inTable = false;
+        std::string header;                 // plain-name header of the current table, or empty
+        std::optional<std::string> named;   // its `name = "..."` value
+        const auto closeTable = [&]() {
+            if (!inTable) return;
+            if (named) {
+                if (IsFunctionName(*named)) out.push_back(*named); else bad = true;
+            } else if (!header.empty()) {
+                out.push_back(header);
+            }
+            inTable = false;
+            header.clear();
+            named.reset();
+        };
         detail::ForEachLine(text, [&](std::string_view line) {
-            if (line.size() < 3 || line.front() != '[' || line.back() != ']' || line[1] == '[') return;
-            const std::string_view name = line.substr(1, line.size() - 2);
-            if (IsFunctionName(name)) out.emplace_back(name);
-            else bad = true;
+            if (line.empty() || line.front() == '#') return;
+            if (line.size() >= 3 && line.front() == '[' && line.back() == ']' && line[1] != '[') {
+                closeTable();
+                inTable = true;
+                const std::string_view key = line.substr(1, line.size() - 2);
+                if (detail::IsHexKey(key)) return;
+                if (IsFunctionName(key)) header = std::string(key);
+                else bad = true;
+                return;
+            }
+            if (!inTable) return;
+            const std::size_t eq = line.find('=');
+            if (eq == std::string_view::npos || detail::Trim(line.substr(0, eq)) != "name") return;
+            named = detail::ParseQuoted(detail::Trim(line.substr(eq + 1)));
+            if (!named) bad = true;
         });
+        closeTable();
         if (bad || out.empty()) return std::nullopt;
         std::sort(out.begin(), out.end());
         out.erase(std::unique(out.begin(), out.end()), out.end());
@@ -452,13 +505,15 @@ namespace PatternMigrateCliLogic {
         return (r.requiredFailed.empty() && r.migrated != 0) ? 0 : 2;
     }
 
-    // The steam-monitor format: one `[Name]` table with `rva` and `sig`. Only migrated
+    // The steam-monitor format PatternLoader reads: one table per function keyed by the
+    // FNV-1a hash of its name (`[0xC37F2D8E]`), with `name`, `rva` and `sig`. (v1.5.0 wrote
+    // `[Name]` tables, which PatternLoader skips: such a file loaded as empty.) Only migrated
     // functions are written; the others are comments, so the file loads as it is.
     [[nodiscard]] inline std::string RenderCandidateToml(const FingerprintFile& fp, const RunResult& run)
     {
         using namespace PatternMigrateLogic;
         std::string out;
-        out += "# AmethystTool candidate pattern file, made by tools/pattern_migrate (v1.5.0).\n";
+        out += "# AmethystTool candidate pattern file, made by tools/pattern_migrate (v1.6.0).\n";
         out += "# REVIEW IT BEFORE USE: a wrong RVA hooks the wrong function and can crash Steam.\n";
         out += "# Migrated from component " + PatternRecorderLogic::TomlQuote(fp.component) + ", build " +
                PatternRecorderLogic::TomlQuote(fp.sha256) + ".\n";
@@ -466,7 +521,8 @@ namespace PatternMigrateCliLogic {
         for (std::size_t i = 0; i < run.results.size() && i < fp.fps.size(); ++i) {
             const NamedMigration& m = run.results[i];
             if (m.result.verdict == Verdict::Migrated) {
-                out += "\n[" + m.name + "]\n";
+                out += "\n[" + detail::HexKey(Fnv1aHash(m.name.c_str())) + "]\n";
+                out += "name = " + PatternRecorderLogic::TomlQuote(m.name) + "\n";
                 out += "rva = " + PatternRecorderLogic::HexRva(m.result.rva) + "\n";
                 out += "sig = " + PatternRecorderLogic::TomlQuote(
                                       PatternRecorderLogic::SigString(fp.fps[i].bytes, fp.fps[i].mask)) + "\n";
