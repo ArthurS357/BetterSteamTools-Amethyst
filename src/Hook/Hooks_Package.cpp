@@ -10,6 +10,7 @@
 #include "Utils/HookSupport/VehCommon.h"
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -30,31 +31,47 @@ namespace {
     std::atomic<void*> g_pCUser{nullptr};
     // Published only after the initial fill, so non-null also means "initialized".
     // CheckAppOwnership's fast path, which runs on every call, reads just this.
+    // RevalidateInjectedPackage (M3) sets it back to null, under g_appIdVecMutex, when
+    // Steam replaced the object; the next CheckAppOwnership fills the new one.
     std::atomic<PackageInfo*> g_pInjectedPackageInfo{nullptr};
 
-    // Serialises every access THIS DLL makes to the injected package's AppIdVec:
-    // the initial fill on a Steam thread, NotifyLicenseChanged on a watcher thread,
-    // the owned-depot dump. A plain mutex because almost all of them write, including
-    // the fill. Order: g_appIdVecMutex -> LuaConfig's g_stateMutex (see LuaConfig.cpp).
-    // Never hold it across MarkLicenseAsChanged or GetPackageInfo: those run Steam
-    // code that can re-enter CheckAppOwnership.
-    // ponytail: Steam's own threads read this vector with no lock we can take, and
-    // CUtlMemoryGrow can reallocate it under them. That race is inherent to mutating
-    // it off-thread; the upgrade path is marshalling the mutation onto the thread
-    // that reads it, the way UI removals are drained from RunFrame.
+    // Serialises every access THIS DLL makes to the injected package's AppIdVec and to
+    // g_pInjectedPackageInfo's value as seen by the diagnostics: the initial fill, the
+    // reconcile, the owned-depot dump, the pointer revalidation. A plain mutex because
+    // almost all of them write. Order: g_appIdVecMutex -> LuaConfig's g_stateMutex (see
+    // LuaConfig.cpp). Never hold it across MarkLicenseAsChanged or GetPackageInfo: those
+    // run Steam code that can re-enter CheckAppOwnership.
+    //
+    // M1 (v1.6.0): every write to the vector now runs inside CheckAppOwnership, on a Steam
+    // thread, in Steam's own ownership-query path; the .lua and config watchers only raise
+    // g_licenseChangePending. ponytail: CheckAppOwnership is called from more than one Steam
+    // thread, and Steam's readers take no lock we can take, so a reader on ANOTHER Steam
+    // thread can still see the vector mid-edit. What is gone is the writer on a thread
+    // Steam never schedules against. Upgrade path, if a trace ever shows that race: run the
+    // drain only on the thread that runs ProcessPendingLicenseUpdates (CUser's RunFrame).
     std::mutex g_appIdVecMutex;
+
+    // Raised by NotifyLicenseChanged (watcher threads), consumed by the next CheckAppOwnership.
+    std::atomic<bool> g_licenseChangePending{false};
+
+    // M3 (v1.6.0): how often CheckAppOwnership asks Steam again for package 0, to notice
+    // that Steam replaced the PackageInfo the injection lives in. ponytail: a fixed interval;
+    // between a replacement and the next check, readers still see the old pointer. A hook on
+    // Steam's package-cache update would close that window; no such signature is known.
+    constexpr int64_t kPackageRecheckIntervalMs = 2000;
+    std::atomic<int64_t> g_nextPackageRecheckMs{0};
 
     constexpr PackageId_t kInjectedPackageId = 0;
     constexpr uint64_t kInjectedPkgAccessToken = 10660652434190618804ull;
 
     // Marks package 0 changed and raises CUser's flags; Steam's RunFrame then runs
     // ProcessPendingLicenseUpdates and rebuilds the ownership index on its own thread.
-    // Neither of those is ever called from here: the index has no lock, and
-    // NotifyLicenseChanged reaches this from the file-watcher thread.
+    // Neither of those is ever called from here: the index has no lock. Both callers run
+    // inside CheckAppOwnership on a Steam thread (since v1.6.0 also the .lua reload, M4).
     // ponytail: the trigger is one unlocked aligned 16-bit store into CUser. A race with
     // RunFrame clearing the run flag is harmless: PPLU clears the rebuild flag before it
     // rebuilds (0x9FA7DC, then the call at 0x9FA7E4), so a flag raised meanwhile is never
-    // lost. MarkLicenseAsChanged still runs on the watcher thread as it always has.
+    // lost.
     bool MarkLicenseAsChangedAndRequestRebuild() {
         void* user = g_pCUser;
         if (!user || !oMarkLicenseAsChanged) {
@@ -149,9 +166,20 @@ namespace {
         return true;
     }
 
+    // Set while Steam's license pass (ProcessPendingLicenseUpdates) runs on this thread; the
+    // gate section below says what it holds. Declared here because the helpers that edit
+    // package 0 (fill, revalidate, drain) stay out of the pass: a CheckAppOwnership nested
+    // in it must not grow or swap the vector the pass may be walking further up the stack.
+    // Their work is simply left for the next call outside the pass.
+    struct GateWindow {
+        GateSkipLogic::Marks<CAppData> marks;
+        void* cache = nullptr;   // the appinfo cache GetOrAddAppData was called on
+    };
+    thread_local GateWindow* t_gate = nullptr;
+
     bool TryInitFakeLicenseOnce() {
         if (g_pInjectedPackageInfo) return true;
-        if (!CAPTURE_READY(GetPackageInfo)) return false;
+        if (t_gate || !CAPTURE_READY(GetPackageInfo)) return false;
 
         PackageInfo* pPkg = oGetPackageInfo(g_pCPackageInfo, kInjectedPackageId, kInjectedPkgAccessToken);
         if(!pPkg) {
@@ -169,6 +197,51 @@ namespace {
 
         MarkLicenseAsChangedAndRequestRebuild();
         return true;
+    }
+
+    // M3: Steam can drop the PackageInfo of package 0 and build a new one (a package-cache
+    // update); the injected ids live only in the old one. Asks Steam for package 0 at most
+    // every kPackageRecheckIntervalMs and, when it hands back another object, re-arms the
+    // initial fill: TryInitFakeLicenseOnce then fills the new object and marks it changed.
+    // A null answer is "don't know" and keeps the current pointer (re-arming on it would
+    // make every CheckAppOwnership retry GetPackageInfo and warn).
+    void RevalidateInjectedPackage() {
+        PackageInfo* const cached = g_pInjectedPackageInfo;
+        if (!cached || t_gate || !CAPTURE_READY(GetPackageInfo)) return;
+
+        const int64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        int64_t due = g_nextPackageRecheckMs.load();
+        if (now < due) return;
+        // One thread per interval does the check; the others go on.
+        if (!g_nextPackageRecheckMs.compare_exchange_strong(due, now + kPackageRecheckIntervalMs)) return;
+
+        PackageInfo* const live = oGetPackageInfo(g_pCPackageInfo, kInjectedPackageId, kInjectedPkgAccessToken);
+        if (!live || live == cached) return;
+
+        std::scoped_lock lock(g_appIdVecMutex);
+        if (g_pInjectedPackageInfo != cached) return;   // another thread already re-armed
+        g_pInjectedPackageInfo = nullptr;
+        LOG_PACKAGE_WARN("Package {} was rebuilt by Steam ({} -> {}); re-injecting the configured ids",
+                         kInjectedPackageId, static_cast<void*>(cached), static_cast<void*>(live));
+    }
+
+    void ApplyLicenseChange();
+
+    // M1/M4: the watchers only flag the change; it is applied here, on the Steam thread that
+    // runs CheckAppOwnership. Applied only once the injection exists: before that the flag
+    // stays up, and the initial fill reads the full .lua set anyway.
+    // Nothing may unwind out of the detour into Steam's frames: on any exception the change
+    // goes back to pending and is retried on the next call.
+    void DrainLicenseChange() {
+        if (t_gate || !g_licenseChangePending.load() || !g_pInjectedPackageInfo) return;
+        if (!g_licenseChangePending.exchange(false)) return;   // another thread took it
+        try {
+            ApplyLicenseChange();
+        } catch (...) {
+            g_licenseChangePending = true;
+            LOG_PACKAGE_ERROR("NotifyLicenseChanged: applying the .lua change threw; retried on the next ownership query");
+        }
     }
 
 
@@ -300,41 +373,48 @@ namespace {
     //
     // The marks live on the pass's own stack and a trivial thread_local pointer reaches them:
     // nothing is shared between threads, and a nested pass joins the outer window instead of
-    // closing it. ponytail: the CAppData pointers are kept until the pass ends. Steam frees an
-    // AppData only when the appinfo cache is purged, which nothing in the pass does (read:
-    // ProcessPendingLicenseUpdates, the first half of the index rebuild); not proven for the
-    // whole callee tree. Upgrade path: look each id up again before restoring.
-    thread_local GateSkipLogic::Marks<CAppData>* t_gate = nullptr;
+    // closing it. The CAppData pointers are kept only as identities: Restore looks each id
+    // up again (look-up only, never creates) and clears the flag only on the same entry, so an
+    // AppData Steam freed or replaced during the pass is never written (M2, v1.6.0).
+    // GateWindow / t_gate are declared above TryInitFakeLicenseOnce.
+
+    // The third argument is Steam's "look up only": nonzero returns null for an unknown app
+    // instead of adding it (4DF790: `test bpl,bpl / jne` straight to the epilogue). The gate
+    // passes 0, so it also creates the blank entry we then flag; Restore passes 1.
+    HOOK_FUNC(GetOrAddAppData, CAppData*, void* pCache, AppId_t appId, bool bLookupOnly) {
+        CAppData* pData = oGetOrAddAppData(pCache, appId, bLookupOnly);
+        // Restore looks ids up in one cache; an entry of any other cache is never raised,
+        // since it could not be put back.
+        if (t_gate && (!t_gate->cache || t_gate->cache == pCache) &&
+            t_gate->marks.Raise(appId, pData, [appId] { return LuaConfig::HasDepot(appId, false); })) {
+            t_gate->cache = pCache;
+            LOG_PACKAGE_TRACE("GetOrAddAppData: skip_flag raised for injected id {} (no appinfo)", appId);
+        }
+        return pData;
+    }
 
     HOOK_FUNC(ProcessPendingLicenseUpdates, bool, void* pUser) {
         struct Window {
-            GateSkipLogic::Marks<CAppData> marks;
+            GateWindow gate;
             bool outermost;
-            Window() : outermost(t_gate == nullptr) { if (outermost) t_gate = &marks; }
+            Window() : outermost(t_gate == nullptr) { if (outermost) t_gate = &gate; }
             ~Window() {
                 if (!outermost) return;
-                t_gate = nullptr;
-                [[maybe_unused]] const size_t raised = marks.Count();
-                marks.Restore();
-                LOG_PACKAGE_TRACE("License pass: skip_flag was raised on {} injected ids with no appinfo, then restored", raised);
+                t_gate = nullptr;   // before the look-ups below: they must not raise anything
+                [[maybe_unused]] const size_t raised = gate.marks.Count();
+                void* const cache = gate.cache;
+                [[maybe_unused]] const size_t restored = gate.marks.Restore([cache](uint32_t id) -> CAppData* {
+                    return cache ? oGetOrAddAppData(cache, id, /*bLookupOnly=*/true) : nullptr;
+                });
+                LOG_PACKAGE_TRACE("License pass: skip_flag was raised on {} injected ids with no appinfo; "
+                                  "{} restored, {} gone or replaced by Steam (left alone)",
+                                  raised, restored, raised - restored);
             }
         } window;
         const bool done = oProcessPendingLicenseUpdates(pUser);
         LOG_PACKAGE_DEBUG("License pass finished: {}", done ? "ownership index rebuilt or nothing pending"
                                                             : "stopped at the appinfo gate");
         return done;
-    }
-
-    // The third argument is Steam's "look up only": nonzero returns null for an unknown app
-    // instead of adding it (4DF790: `test bpl,bpl / jne` straight to the epilogue). The gate
-    // passes 0, so it also creates the blank entry we then flag.
-    HOOK_FUNC(GetOrAddAppData, CAppData*, void* pCache, AppId_t appId, bool bLookupOnly) {
-        CAppData* pData = oGetOrAddAppData(pCache, appId, bLookupOnly);
-        if (t_gate &&
-            t_gate->Raise(pData, [appId] { return LuaConfig::HasDepot(appId, false); })) {
-            LOG_PACKAGE_TRACE("GetOrAddAppData: skip_flag raised for injected id {} (no appinfo)", appId);
-        }
-        return pData;
     }
 
     HOOK_FUNC(CheckAppOwnership, bool, void* pObj, AppId_t appId, AppOwnership* pOwn) {
@@ -344,7 +424,14 @@ namespace {
         }
 
         bool result = oCheckAppOwnership(pObj, appId, pOwn);
+        // Order: a rebuilt package re-arms the fill, the fill runs, then a pending .lua
+        // change is applied to whichever object is current.
+        try {
+            RevalidateInjectedPackage();
+        } catch (...) {   // logging only can throw here; never into Steam's frames
+        }
         TryInitFakeLicenseOnce();
+        DrainLicenseChange();
         Hooks_Package::TryDumpOwnedDepots();
 
         if (pOwn && LuaConfig::HasDepot(appId,false)) {
@@ -410,18 +497,19 @@ namespace Hooks_Package {
         return {g_ownedDepotsReady, g_ownedDepots};
     }
 
+    // The pointer is read under the lock: the M3 re-arm clears it under the same lock.
     InjectedState GetInjectedState(AppId_t id) {
+        std::scoped_lock lock(g_appIdVecMutex);
         PackageInfo* pPkg = g_pInjectedPackageInfo;
         if (!pPkg) return InjectedState::NotReady;
-        std::scoped_lock lock(g_appIdVecMutex);
         return ContainsAppId(pPkg->AppIdVec, id) ? InjectedState::Present : InjectedState::Absent;
     }
 
     InjectedLayout GetInjectedLayout(AppId_t id) {
         InjectedLayout out;
+        std::scoped_lock lock(g_appIdVecMutex);
         PackageInfo* pPkg = g_pInjectedPackageInfo;
         if (!pPkg) return out;
-        std::scoped_lock lock(g_appIdVecMutex);
         const AppId_t* p = pPkg->AppIdVec.m_Memory.m_pMemory;
         const size_t   n = pPkg->AppIdVec.m_Size;
         out.ready  = true;
@@ -467,17 +555,41 @@ namespace Hooks_Package {
     }
 
     void NotifyLicenseChanged() {
-        PackageInfo* pPkg = g_pInjectedPackageInfo;
-        if (!pPkg) {
-            LOG_PACKAGE_WARN("NotifyLicenseChanged: injected PackageInfo not ready, cannot notify");
-            return;
-        }
+        // Watcher thread: nothing of Steam's is touched here (M1/M4). The next
+        // CheckAppOwnership applies the queued change on its own thread.
+        g_licenseChangePending = true;
+        LOG_PACKAGE_DEBUG("NotifyLicenseChanged: change queued for the next CheckAppOwnership{}",
+                          g_pInjectedPackageInfo ? "" : " (applied after the initial fill)");
+    }
+}
+
+namespace {
+    // Runs inside CheckAppOwnership (DrainLicenseChange), never on a watcher thread.
+    void ApplyLicenseChange() {
+        // The drain is rare, so it does not wait for the M3 interval: Steam is asked for
+        // package 0 right now (no lock held: Steam code), and a replaced object is re-armed
+        // instead of written into.
+        PackageInfo* const live = CAPTURE_READY(GetPackageInfo)
+            ? oGetPackageInfo(g_pCPackageInfo, kInjectedPackageId, kInjectedPkgAccessToken) : nullptr;
 
         PackageReconcileLogic::Plan plan;
         {
-            // Take and apply under one lock: two watcher threads can get here, and
-            // applying each other's queues out of order would lose a change.
+            // Take and apply under one lock: two Steam threads can drain back to back, and
+            // applying each other's queues out of order would lose a change. The pointer is
+            // read under it too, so a concurrent re-arm (M3) is seen.
             std::scoped_lock lock(g_appIdVecMutex);
+            PackageInfo* pPkg = g_pInjectedPackageInfo;
+            if (!pPkg) {   // re-armed meanwhile: keep the change for after the refill
+                g_licenseChangePending = true;
+                return;
+            }
+            if (live && live != pPkg) {   // Steam rebuilt it: refill first, then apply
+                g_pInjectedPackageInfo = nullptr;
+                g_licenseChangePending = true;
+                LOG_PACKAGE_WARN("Package {} was rebuilt by Steam ({} -> {}); re-injecting before the .lua change",
+                                 kInjectedPackageId, static_cast<void*>(pPkg), static_cast<void*>(live));
+                return;
+            }
 
             const std::vector<AppId_t> queuedRemovals = LuaConfig::TakePendingRemovals();
             const std::vector<AppId_t> queuedAdditions = LuaConfig::TakePendingAdditions();
@@ -531,14 +643,16 @@ namespace Hooks_Package {
         // Mark package 0 as changed and request the index rebuild + library refresh. This
         // also fires when a reload left the id set unchanged, as it always has: the file may
         // have changed a manifest pin or a token, and nothing shows Steam does not need it.
+        // M4: on the CheckAppOwnership thread now, the same place the initial fill has
+        // always called it from.
         if (!MarkLicenseAsChangedAndRequestRebuild()) {
             LOG_PACKAGE_WARN("NotifyLicenseChanged: failed to mark license as changed");
             return;
         }
         LOG_PACKAGE_INFO("NotifyLicenseChanged: {} added, {} removed", plan.additions.size(), plan.removals.size());
 
-        // Queue UI removals for the main-thread RunFrame hook to drain.
-        // Never touch MarkAppChange from this (FileWatcher) thread.
+        // Queue UI removals for the steamui RunFrame hook to drain: MarkAppChange belongs
+        // to the UI thread, not to this one either.
         for (AppId_t id : plan.removals)
             Hooks_SteamUI::QueueRemoval(id);
     }

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <vector>
 
 // Steam's ProcessPendingLicenseUpdates (the pass that rebuilds the ownership index) stops
@@ -13,6 +14,10 @@
 //   - raised for good, a Lua game added a moment ago (appinfo not fetched yet) would read as
 //     "known unknown" and might never be requested;
 //   - raised once and left, MarkLicenseAsChanged clears it again for every app of the package.
+//
+// Restore (v1.6.0) never dereferences a pointer kept from Raise: it looks each id up again
+// and clears the flag only when Steam still hands back the very entry that was raised. An
+// entry Steam freed or replaced during the pass is not ours any more and is left alone.
 namespace GateSkipLogic {
 
     // `Data` is Steam's CAppData: bSkipFlag, HasEmptyAppInfoSha().
@@ -26,23 +31,38 @@ namespace GateSkipLogic {
         Marks() { raised_.reserve(512); }
 
         template <class Injected>
-        bool Raise(Data* data, Injected injected) {
+        bool Raise(std::uint32_t id, Data* data, Injected injected) {
             if (!data || data->bSkipFlag || !data->HasEmptyAppInfoSha() || !injected()) return false;
-            raised_.push_back(data);   // before the flag: a bad_alloc must not leave it raised
+            raised_.push_back({ id, data });   // before the flag: a bad_alloc must not leave it raised
             data->bSkipFlag = true;
             return true;
         }
 
         [[nodiscard]] std::size_t Count() const noexcept { return raised_.size(); }
 
-        // Puts back only what Raise changed; a flag Steam itself set stays set.
-        void Restore() noexcept {
-            for (Data* d : raised_) d->bSkipFlag = false;
+        // `lookup(id)` returns Steam's current entry for id (nullptr when it has none) and
+        // must not create one. Puts back only what Raise changed; a flag Steam itself set
+        // stays set. Returns how many flags were put back.
+        template <class Lookup>
+        std::size_t Restore(Lookup lookup) noexcept {
+            std::size_t restored = 0;
+            for (const Mark& m : raised_) {
+                Data* now = lookup(m.id);
+                if (now && now == m.data) {   // compared, never dereferenced before this check
+                    now->bSkipFlag = false;
+                    ++restored;
+                }
+            }
             raised_.clear();
+            return restored;
         }
 
     private:
-        std::vector<Data*> raised_;
+        struct Mark {
+            std::uint32_t id;
+            Data*         data;   // identity only
+        };
+        std::vector<Mark> raised_;
     };
 
 } // namespace GateSkipLogic

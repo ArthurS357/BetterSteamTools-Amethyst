@@ -65,6 +65,8 @@ set(LOGIC_TESTS
     pattern_migrate_logic_test.cpp     # v1.5.0 pillar 4: header-only engine
     pattern_recorder_logic_test.cpp    # v1.5.0 pillar 4: recorder decisions, PE layout, file text
     pattern_migrate_cli_test.cpp       # v1.5.0 pillar 4: tools/pattern_migrate args, fingerprint reader, TOML, report
+    runtime_migrate_logic_test.cpp     # v1.6.0: runtime migration policy, persist rule, stress
+    gate_skip_logic_test.cpp           # v1.6.0: skip_flag restore by id (M2)
     remote_toml_logic_test.cpp
     remote_toml_load_source_test.cpp
     forge_base_cache_test.cpp

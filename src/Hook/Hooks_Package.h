@@ -11,8 +11,10 @@ namespace Hooks_Package {
     void Install();
     void Uninstall();
 
-    // Mark package 0 as changed and raise CUser's rebuild flags; Steam's own RunFrame
-    // then runs ProcessPendingLicenseUpdates and rebuilds the ownership index.
+    // Called by the .lua / config watchers. Only queues: the next CheckAppOwnership (a
+    // Steam thread) applies LuaConfig's pending additions/removals to the injected
+    // package, marks package 0 changed and raises CUser's rebuild flags; Steam's own
+    // RunFrame then runs ProcessPendingLicenseUpdates and rebuilds the ownership index.
     void NotifyLicenseChanged();
 
     // One entry of the license list Steam sends after logon. The access token is

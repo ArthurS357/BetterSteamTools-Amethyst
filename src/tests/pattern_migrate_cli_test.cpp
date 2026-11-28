@@ -159,6 +159,30 @@ namespace {
         EXPECT_FALSE(ParseRequiredFromPatternToml("[bad name]\n").has_value());
     }
 
+    // The format the mirrors actually serve (and PatternLoader reads): hash keys, names in
+    // `name = "..."`. v1.5.0 returned the hash keys as if they were names.
+    TEST(PatternMigrateCliRequired, RealPatternTomlGivesTheNameLinesNotTheHashKeys) {
+        const std::string toml =
+            "[0x82428E37]\nname = \"BBuildAndAsyncSendFrame\"\nrva = \"0xD44F70\"\n\n"
+            "[0xC37F2D8E]\nname = \"BuildDepotDependency\"\nsig = \"48 8B C4\"\n\n"
+            "[0x12345678]\nrva = \"0x10\"\n";   // no name: cannot be mapped back, skipped
+        const auto r = ParseRequiredFromPatternToml(toml);
+        ASSERT_TRUE(r.has_value());
+        EXPECT_EQ(*r, (std::vector<std::string>{ "BBuildAndAsyncSendFrame", "BuildDepotDependency" }));
+        EXPECT_FALSE(ParseRequiredFromPatternToml("[0x1]\nname = \"bad name\"\n").has_value());
+        EXPECT_FALSE(ParseRequiredFromPatternToml("[0x1]\nname = unquoted\n").has_value());
+        EXPECT_FALSE(ParseRequiredFromPatternToml("[0x1]\nrva = \"0x1\"\n").has_value()) << "nothing named";
+    }
+
+    // What the tool writes is what --required reads back: the two ends of the format agree.
+    TEST(PatternMigrateCliRequired, TheCandidateTomlRoundTripsThroughRequired) {
+        const FingerprintFile fp = ParseOk(OldFingerprintText());
+        const std::string toml = RenderCandidateToml(fp, RunMigration(MakeNewBuild().img.View(), fp, {}));
+        const auto r = ParseRequiredFromPatternToml(toml);
+        ASSERT_TRUE(r.has_value()) << toml;
+        EXPECT_EQ(*r, (std::vector<std::string>{ "BuildDepotDependency", "GetAppByID" }));
+    }
+
     // ── fingerprint file ─────────────────────────────────────────────
 
     TEST(PatternMigrateCliFingerprint, RoundTripsWhatTheRecorderWrites) {
@@ -350,8 +374,12 @@ namespace {
         const NewBuild n = MakeNewBuild();
         const std::string toml = RenderCandidateToml(fp, RunMigration(n.img.View(), fp, {}));
 
-        EXPECT_NE(toml.find("[BuildDepotDependency]\nrva = " + PatternRecorderLogic::HexRva(n.f)), std::string::npos) << toml;
-        EXPECT_NE(toml.find("[GetAppByID]\nrva = " + PatternRecorderLogic::HexRva(n.a)), std::string::npos) << toml;
+        // PatternLoader's format: FNV-1a key, then the name (v1.5.0 wrote [Name], which loaded empty).
+        EXPECT_NE(toml.find("[0xC37F2D8E]\nname = \"BuildDepotDependency\"\nrva = " + PatternRecorderLogic::HexRva(n.f)),
+                  std::string::npos) << toml;
+        EXPECT_NE(toml.find("[" + detail::HexKey(Fnv1aHash("GetAppByID")) + "]\nname = \"GetAppByID\"\nrva = " +
+                            PatternRecorderLogic::HexRva(n.a)), std::string::npos) << toml;
+        EXPECT_EQ(toml.find("[BuildDepotDependency]"), std::string::npos) << toml;
         EXPECT_NE(toml.find("sig = \"48 89 5C 24 08 48 89 74 24 10 57"), std::string::npos) << toml;
         EXPECT_NE(toml.find("??"), std::string::npos) << "the call/RIP displacements stay wildcards";
         EXPECT_NE(toml.find("REVIEW IT BEFORE USE"), std::string::npos);

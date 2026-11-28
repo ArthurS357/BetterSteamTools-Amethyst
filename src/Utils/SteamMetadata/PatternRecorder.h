@@ -13,6 +13,12 @@
 // the worker in PatternLoader.cpp owns those, and this unit can be tested on its own.
 namespace PatternRecorder {
 
+    // The whole DLL, read once, and only if its SHA-256 is still `sha256` (lower-case hex).
+    // nullopt, with a reason in *error, when it cannot be read, is outside the size cap, or
+    // was replaced since it was hashed. Shared by the recorder and the runtime migration.
+    [[nodiscard]] std::optional<std::vector<std::uint8_t>> ReadDllVerified(
+        const std::filesystem::path& dll, const std::string& sha256, std::string* error);
+
     // `resolved` is (name, rva) of every function the hooks resolved in this DLL.
     // nullopt, with a reason in *error, when the DLL cannot be read or parsed, the
     // component/sha256 are not safe path segments, or nothing could be fingerprinted.
